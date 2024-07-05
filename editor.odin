@@ -17,7 +17,7 @@ delete_editor :: proc(using ed: ^Editor) {
     delete_buffer(&buf)
 }
 
-handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey) {
+handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
     switch mode {
         case .NORMAL: {
             if key == .H {
@@ -37,6 +37,21 @@ handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey) {
             }
 
             if key == .I {
+                if is_shift_pressed {
+                    pos.col = 0
+                }
+
+                mode = .INSERT
+            }
+
+            if key == .O {
+                if is_shift_pressed {
+                    insert_empty_line(&buf, pos)
+                } else {
+                    pos.row += 1
+                    insert_empty_line(&buf, pos)
+                }
+
                 mode = .INSERT
             }
         }
@@ -48,14 +63,19 @@ handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey) {
                 mode = .NORMAL
             }
 
-            if key == .BACKSPACE && pos.col > 0 {
-                pos.col -= 1
-                remove_rune(&buf, pos)
+            if key == .BACKSPACE {
+                if pos.col > 0 {
+                    pos.col -= 1
+                    remove_rune(&buf, pos)
+                } else if pos.row > 0 {
+                    pos = shift_line_up(&buf, pos)
+                }
             }
 
             if key == .ENTER {
-                insert_empty_line_below(&buf, pos)
+                inject_empty_line(&buf, pos)
                 pos.row += 1
+                pos.col = 0
             }
         }
     }

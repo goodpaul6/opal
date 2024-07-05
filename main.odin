@@ -59,18 +59,21 @@ main :: proc() {
             handle_charpress(&ed, ch)
         }
 
+        is_ctrl_pressed := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+        is_shift_pressed := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+
         for {
             key := rl.GetKeyPressed()
             if key == .KEY_NULL {
                 break
             }
 
-            handle_keypress(&ed, key)
+            handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
         }
 
         for key in rl.KeyboardKey {
             if key_repeat_should_repeat(&kr, key, 0.3 * SECONDS_TO_FRAMES, 4) {
-                handle_keypress(&ed, key)
+                handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
             }
         }
 
@@ -80,8 +83,6 @@ main :: proc() {
             y_pos : f32 = 0.0
             blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
-            fmt.println("Line count: ", len(ed.buf.lines))
-
             for &line, line_row in ed.buf.lines {
                 codepoints := sa.slice(&line)
 
@@ -89,7 +90,7 @@ main :: proc() {
 
                 if ed.pos.row == line_row && ed.pos.col < len(codepoints) && blink { 
                     prev_ch = codepoints[ed.pos.col]
-                    codepoints[ed.pos.col] = '_'
+                    codepoints[ed.pos.col] = ed.mode == .INSERT ? '_' : '|';
                 }
 
                 defer if prev_ch != 0 {

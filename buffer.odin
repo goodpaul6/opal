@@ -49,10 +49,30 @@ insert_string :: proc(using buf: ^Buffer, pos: Pos, text: string) -> bool {
     return true
 }
 
-insert_empty_line_below :: proc(using buf: ^Buffer, pos: Pos) {
+inject_empty_line :: proc(using buf: ^Buffer, pos: Pos) {
     resize_buffer_to_pos(buf, pos)
 
-    inject_at(&lines, pos.row + 1, Line{})
+    new_line := Line{}
+
+    // If not at end of line, then shift the rest of the contents down
+    line := &lines[pos.row]
+
+    if pos.col != sa.len(line^) {
+        line_text := sa.slice(line)
+
+        sa.append(&new_line, ..line_text[pos.col:])
+        sa.resize(line, pos.col)
+    }
+
+    inject_at(&lines, pos.row + 1, new_line)
+}
+
+insert_empty_line :: proc(using buf: ^Buffer, pos: Pos) {
+    if pos.row >= len(lines) {
+        resize_buffer_to_pos(buf, pos)
+    } else {
+        inject_at(&lines, pos.row, Line{})
+    }
 }
 
 remove_rune :: proc(using buf: ^Buffer, pos: Pos) {
@@ -69,6 +89,20 @@ remove_rune :: proc(using buf: ^Buffer, pos: Pos) {
     }
 
     sa.ordered_remove(line, pos.col)
+}
+
+shift_line_up :: proc(using buf: ^Buffer, pos: Pos) -> Pos {
+    assert(pos.row > 0)
+
+    prev_len := sa.len(lines[pos.row - 1])
+
+    sa.append(&lines[pos.row - 1], ..sa.slice(&lines[pos.row]))
+    ordered_remove(&lines, pos.row)
+
+    return Pos{
+        row = pos.row - 1,
+        col = prev_len
+    }
 }
 
 clamp_pos_to_buffer :: proc(using pos: ^Pos, buf: ^Buffer) {
