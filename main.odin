@@ -12,7 +12,6 @@ WINDOW_INIT_HEIGHT :: 450
 TARGET_FPS :: 120
 SECONDS_TO_FRAMES :: TARGET_FPS
 
-FUJI_WHITE :: rl.Color{0xDC, 0xD7, 0xBA, 0xFF}
 SUMI_INK_0 :: rl.Color{0x16, 0x16, 0x1D, 0xFF}
 
 main :: proc() {

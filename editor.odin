@@ -96,16 +96,39 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 mode = .INSERT
             }
 
+            if key == .A {
+                if is_shift_pressed {
+                    te.move_to(&state, .End)
+                } else {
+                    te.move_to(&state, .Right)
+                }
+
+                mode = .INSERT
+            }
+
             if key == .O {
                 if is_shift_pressed {
+                    te.move_to(&state, .Start)
                     te.input_text(&state, "\n")
+                    te.move_to(&state, .Left)
                 } else {
                     te.move_to(&state, .End)
                     te.input_text(&state, "\n")
+
+                    editor_update_state_indices(ed)
+
                     te.move_to(&state, .Down)
                 }
 
                 mode = .INSERT
+            }
+
+            if key == .B {
+                te.move_to(&state, .Word_Left)
+            }
+
+            if key == .E {
+                te.move_to(&state, .Word_Right)
             }
         }
         
@@ -113,6 +136,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             // TODO(Apaar): Handle arrow keys in insert mode
 
             if key == .ESCAPE {
+                mode = .NORMAL
+            }
+
+            if key == .LEFT_BRACKET && is_ctrl_pressed {
                 mode = .NORMAL
             }
 
