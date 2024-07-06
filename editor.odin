@@ -1,5 +1,9 @@
 package main
 
+import "core:strings"
+import "core:bytes"
+import "core:fmt"
+import te "core:text/edit"
 import rl "vendor:raylib"
 
 Editor_Mode :: enum {
@@ -9,36 +13,84 @@ Editor_Mode :: enum {
 
 Editor :: struct {
     mode: Editor_Mode,
-    buf: Buffer,
-    pos: Pos,
+    sel: [2]int,
+    sb: strings.Builder,
+    state: te.State,
 }
 
-delete_editor :: proc(using ed: ^Editor) {
-    delete_buffer(&buf)
+editor_init :: proc(using ed: ^Editor) {
+    te.init(
+        &state,
+        context.allocator,
+        context.allocator,
+    )
+
+    sb = strings.builder_make()
 }
 
-handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
+editor_destroy :: proc(using ed: ^Editor) {
+    strings.builder_destroy(&sb)
+
+    te.destroy(&state)
+}
+
+editor_begin_frame :: proc(using ed: ^Editor) {
+    te.begin(&state, 0, &sb)
+    state.selection = sel
+}
+
+editor_end_frame :: proc(using ed: ^Editor) {
+    sel = state.selection
+    te.end(&state)
+}
+
+editor_update_state_indices :: proc(using ed: ^Editor) {
+    sel_pos := state.selection[0]
+
+    prev_line_end := bytes.last_index_byte(sb.buf[:sel_pos], '\n')
+
+    state.line_start = prev_line_end < 0 ? 0 : prev_line_end + 1
+
+    if sel_pos >= strings.builder_len(sb) {
+        state.line_end = sel_pos
+        state.down_index = sel_pos
+    }
+
+    if prev_line_end < 0 {
+        state.up_index = 0
+        return
+    }
+
+    prev_prev_line_end := max(bytes.last_index_byte(sb.buf[:prev_line_end], '\n'), 0)
+
+    bytes_from_start_of_line := sel_pos - prev_line_end
+    state.up_index = prev_prev_line_end + bytes_from_start_of_line
+}
+
+editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
+    editor_update_state_indices(ed)
+
     switch mode {
         case .NORMAL: {
             if key == .H {
-                pos.col -= 1
+                te.move_to(&state, .Left)
             }
 
             if key == .L {
-                pos.col += 1
+                te.move_to(&state, .Right)
             }
 
             if key == .K {
-                pos.row -= 1
+                te.move_to(&state, .Up)
             }
 
             if key == .J {
-                pos.row += 1
+                te.move_to(&state, .Down)
             }
 
             if key == .I {
                 if is_shift_pressed {
-                    pos.col = 0
+                    te.move_to(&state, .Start)
                 }
 
                 mode = .INSERT
@@ -46,10 +98,11 @@ handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed:
 
             if key == .O {
                 if is_shift_pressed {
-                    insert_empty_line(&buf, pos)
+                    te.input_text(&state, "\n")
                 } else {
-                    pos.row += 1
-                    insert_empty_line(&buf, pos)
+                    te.move_to(&state, .End)
+                    te.input_text(&state, "\n")
+                    te.move_to(&state, .Down)
                 }
 
                 mode = .INSERT
@@ -64,26 +117,21 @@ handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed:
             }
 
             if key == .BACKSPACE {
-                if pos.col > 0 {
-                    pos.col -= 1
-                    remove_rune(&buf, pos)
-                } else if pos.row > 0 {
-                    pos = shift_line_up(&buf, pos)
+                if is_ctrl_pressed {
+                    te.delete_to(&state, .Word_Left)
+                } else {
+                    te.delete_to(&state, .Left)
                 }
             }
 
             if key == .ENTER {
-                inject_empty_line(&buf, pos)
-                pos.row += 1
-                pos.col = 0
+                te.input_text(&state, "\n")
             }
         }
     }
-
-    clamp_pos_to_buffer(&pos, &buf)
 }
 
-handle_charpress :: proc(using ed: ^Editor, ch: rune) {
+editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
     switch mode {
         case .NORMAL: {
         }
@@ -93,8 +141,7 @@ handle_charpress :: proc(using ed: ^Editor, ch: rune) {
                 break
             }
 
-            insert_rune(&buf, pos, ch)
-            pos.col += 1
+            te.input_rune(&state, ch)
         }
     }
 }

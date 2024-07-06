@@ -1,2 +1,5 @@
 *.swp
 *.exe
+*.pdb
+*.raddbg
+*.rdi
