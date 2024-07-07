@@ -11,11 +11,55 @@ Editor_Mode :: enum {
     INSERT,
 }
 
+Editor_Loc :: struct {
+    row, col: int
+}
+
 Editor :: struct {
     mode: Editor_Mode,
     sel: [2]int,
     sb: strings.Builder,
     state: te.State,
+}
+
+byte_index_to_editor_loc :: proc(idx: int, buf: []byte) -> Editor_Loc {
+    buf := buf[:idx]
+    row := 0
+
+    for {
+        next_pos := bytes.index_byte(buf, '\n')
+
+        if next_pos < 0 {
+            break
+        }
+
+        buf = buf[next_pos + 1:]
+        row += 1
+    }
+
+    col := len(buf)
+
+    return {row, col}
+}
+
+// Clamps the result to len(buf) inclusive
+editor_loc_to_byte_index :: proc(loc: Editor_Loc, buf: []byte) -> int {
+    buf := buf
+
+    byte_idx := 0
+
+    for row := 0; row < loc.row; row += 1 {
+        line_end := bytes.index_byte(buf, '\n')
+        if line_end < 0 do break
+
+        buf = buf[line_end + 1:]
+        byte_idx += line_end + 1
+    }
+
+    max_col := bytes.index_byte(buf, '\n')
+    if max_col < 0 do max_col = len(buf)
+
+    return byte_idx + min(loc.col, max_col)
 }
 
 editor_init :: proc(using ed: ^Editor) {
@@ -47,24 +91,26 @@ editor_end_frame :: proc(using ed: ^Editor) {
 editor_update_state_indices :: proc(using ed: ^Editor) {
     sel_pos := state.selection[0]
 
-    prev_line_end := bytes.last_index_byte(sb.buf[:sel_pos], '\n')
-
-    state.line_start = prev_line_end < 0 ? 0 : prev_line_end + 1
-
-    if sel_pos >= strings.builder_len(sb) {
-        state.line_end = sel_pos
-        state.down_index = sel_pos
+    state.line_end = bytes.index_byte(sb.buf[sel_pos:], '\n')
+    if state.line_end < 0 {
+        state.line_end = len(sb.buf)
+    } else {
+        state.line_end += sel_pos
     }
 
-    if prev_line_end < 0 {
-        state.up_index = 0
-        return
-    }
+    loc := byte_index_to_editor_loc(sel_pos, sb.buf[:])
+    
+    state.line_start = editor_loc_to_byte_index({loc.row, 0}, sb.buf[:])
+    
+    state.up_index = editor_loc_to_byte_index({loc.row - 1, loc.col}, sb.buf[:])
+    state.down_index = editor_loc_to_byte_index({loc.row + 1, loc.col}, sb.buf[:])
 
-    prev_prev_line_end := max(bytes.last_index_byte(sb.buf[:prev_line_end], '\n'), 0)
-
-    bytes_from_start_of_line := sel_pos - prev_line_end
-    state.up_index = prev_prev_line_end + bytes_from_start_of_line
+    fmt.println(
+        "line_start", state.line_start,
+        "line_end", state.line_end,
+        "up_index", state.up_index,
+        "down_index", state.down_index
+    )
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
@@ -130,6 +176,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             if key == .E {
                 te.move_to(&state, .Word_Right)
             }
+
+            if key == .FOUR && is_shift_pressed {
+                te.move_to(&state, .End)
+            }
         }
         
         case .INSERT: {
@@ -153,6 +203,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
             if key == .ENTER {
                 te.input_text(&state, "\n")
+            }
+            
+            if key == .TAB {
+                te.input_text(&state, "    ")
             }
         }
     }

@@ -28,7 +28,7 @@ main :: proc() {
     rl.SetTargetFPS(TARGET_FPS)
 
     font := rl.LoadFontEx(
-        "fonts/Inter-Regular.ttf", 
+        "fonts/CommitMono-400-Regular.otf", 
         fontSize=24, 
         codepoints=nil, 
         codepointCount=0
