@@ -104,13 +104,6 @@ editor_update_state_indices :: proc(using ed: ^Editor) {
     
     state.up_index = editor_loc_to_byte_index({loc.row - 1, loc.col}, sb.buf[:])
     state.down_index = editor_loc_to_byte_index({loc.row + 1, loc.col}, sb.buf[:])
-
-    fmt.println(
-        "line_start", state.line_start,
-        "line_end", state.line_end,
-        "up_index", state.up_index,
-        "down_index", state.down_index
-    )
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
@@ -118,6 +111,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
     switch mode {
         case .NORMAL: {
+            if key == .X {
+                te.delete_to(&state, .Right)
+            }
+
             if key == .H {
                 te.move_to(&state, .Left)
             }
@@ -177,6 +174,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 te.move_to(&state, .Word_Right)
             }
 
+            if key == .ZERO {
+                te.move_to(&state, .Soft_Line_Start)
+            }
+
             if key == .FOUR && is_shift_pressed {
                 te.move_to(&state, .Soft_Line_End)
             }
@@ -194,10 +195,18 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .BACKSPACE {
+                sel_pos := sel[0]
+                is_at_soft_tab := 
+                    (sel_pos - 4) >= 0 && 
+                    string(sb.buf[sel_pos - 4:sel_pos]) == "    "
+
                 if is_ctrl_pressed {
                     te.delete_to(&state, .Word_Left)
-                } else {
+                } else if !is_at_soft_tab {
                     te.delete_to(&state, .Left)
+                } else {
+                    state.selection[0] -= 4
+                    te.selection_delete(&state)
                 }
             }
 
