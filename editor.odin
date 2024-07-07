@@ -136,7 +136,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
             if key == .I {
                 if is_shift_pressed {
-                    te.move_to(&state, .Start)
+                    te.move_to(&state, .Soft_Line_Start)
                 }
 
                 mode = .INSERT
@@ -144,7 +144,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
             if key == .A {
                 if is_shift_pressed {
-                    te.move_to(&state, .End)
+                    te.move_to(&state, .Soft_Line_End)
                 } else {
                     te.move_to(&state, .Right)
                 }
@@ -154,7 +154,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
             if key == .O {
                 if is_shift_pressed {
-                    te.move_to(&state, .Start)
+                    te.move_to(&state, .Soft_Line_Start)
                     te.input_text(&state, "\n")
                     te.move_to(&state, .Left)
                 } else {
@@ -178,7 +178,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .FOUR && is_shift_pressed {
-                te.move_to(&state, .End)
+                te.move_to(&state, .Soft_Line_End)
             }
         }
         

@@ -75,7 +75,7 @@ main :: proc() {
         }
 
         for key in rl.KeyboardKey {
-            if key_repeat_should_repeat(&kr, key, 0.3 * SECONDS_TO_FRAMES, 4) {
+            if key_repeat_should_repeat(&kr, key, 0.4 * SECONDS_TO_FRAMES, 5) {
                 editor_handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
             }
         }
