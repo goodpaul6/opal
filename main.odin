@@ -12,8 +12,6 @@ WINDOW_INIT_HEIGHT :: 450
 TARGET_FPS :: 120
 SECONDS_TO_FRAMES :: TARGET_FPS
 
-SUMI_INK_0 :: rl.Color{0x16, 0x16, 0x1D, 0xFF}
-
 main :: proc() {
     rl.SetConfigFlags({.WINDOW_RESIZABLE});
 
@@ -27,12 +25,8 @@ main :: proc() {
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(TARGET_FPS)
 
-    font := rl.LoadFontEx(
-        "fonts/CommitMono-400-Regular.otf", 
-        fontSize=24, 
-        codepoints=nil, 
-        codepointCount=0
-    )
+    theme := theme_make_default()
+    defer theme_destroy(&theme)
 
     ed := Editor{}
 
@@ -81,9 +75,9 @@ main :: proc() {
         }
 
         rl.BeginDrawing()
-            rl.ClearBackground(SUMI_INK_0)
+            rl.ClearBackground(theme.bg_color)
 
-            editor_draw(&ed, font)
+            editor_draw(&ed, &theme)
         rl.EndDrawing()
 
         free_all(context.temp_allocator)
