@@ -64,7 +64,7 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
                 width = mode == .NORMAL ? caret_w : 2,
                 height = sub_text_size.y,
             },
-            theme.fg_color
+            theme.fg_color,
         )
     }
 }

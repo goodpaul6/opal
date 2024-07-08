@@ -14,7 +14,7 @@ main :: proc() {
     rl.InitWindow(
         title=WINDOW_TITLE, 
         width=WINDOW_INIT_WIDTH, 
-        height=WINDOW_INIT_HEIGHT
+        height=WINDOW_INIT_HEIGHT,
     )
     defer rl.CloseWindow()
 

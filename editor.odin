@@ -11,7 +11,7 @@ Editor_Mode :: enum {
 }
 
 Editor_Loc :: struct {
-    row, col: int
+    row, col: int,
 }
 
 Editor :: struct {

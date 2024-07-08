@@ -9,7 +9,7 @@ Key_Repeat_State_Key :: struct {
 }
 
 Key_Repeat_State :: struct {
-    keys: #sparse [rl.KeyboardKey]Key_Repeat_State_Key
+    keys: #sparse [rl.KeyboardKey]Key_Repeat_State_Key,
 }
 
 key_repeat_begin_frame :: proc(using state: ^Key_Repeat_State) {
