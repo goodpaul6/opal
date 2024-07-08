@@ -2,7 +2,6 @@ package main
 
 import "core:strings"
 import "core:bytes"
-import "core:fmt"
 import te "core:text/edit"
 import rl "vendor:raylib"
 
@@ -22,8 +21,8 @@ Editor :: struct {
     state: te.State,
 }
 
-byte_index_to_editor_loc :: proc(idx: int, buf: []byte) -> Editor_Loc {
-    buf := buf[:idx]
+byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
+    buf := input_buf[:idx]
     row := 0
 
     for {

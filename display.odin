@@ -1,7 +1,6 @@
 package main
 
 import "core:strings"
-import sa "core:container/small_array"
 import rl "vendor:raylib"
 
 editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {

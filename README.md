@@ -9,3 +9,9 @@ A native alternative to Obsidian. Only has the features I care about.
 - [ ] Add command input
 - [ ] Correctly highlight markdown TODO lists
 * [ ] Add `dw` action + motion from Vim
+- [ ] Add command for new day file
+- [ ] Add forward and backward search bindings
+
+## BUGS
+
+- [ ] Little bug in Odin compiler where it lists `-build-mode:lib` twice in help

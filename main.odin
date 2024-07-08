@@ -1,10 +1,6 @@
 package main
 
 import rl "vendor:raylib"
-import sa "core:container/small_array"
-import "core:fmt"
-import "core:math"
-import "core:strings"
 
 WINDOW_TITLE :: "Opal"
 WINDOW_INIT_WIDTH :: 800
