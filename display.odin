@@ -3,7 +3,12 @@ package main
 import "core:strings"
 import rl "vendor:raylib"
 
+STATUS_HEIGHT :: 24
+
 editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
+    font := theme.fonts[.BODY]
+    font_size := f32(font.baseSize)
+
     y_pos : f32 = 0.0
     blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
@@ -23,8 +28,6 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
             line_start_byte_index = next_line_start_byte_index
         }
 
-        font := theme.fonts[.BODY]
-        font_size := f32(font.baseSize)
         
         rl.DrawTextEx(
             font=font,
@@ -67,4 +70,28 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
             theme.fg_color,
         )
     }
+
+    ren_size := [?]f32{
+        f32(rl.GetRenderWidth()), 
+        f32(rl.GetRenderHeight()),
+    }
+
+    rl.DrawRectangleRec(
+        {
+            x = 0,
+            y = ren_size.y - STATUS_HEIGHT,
+            width = ren_size.x,
+            height = STATUS_HEIGHT
+        }, 
+        theme.bg_color
+    )
+
+    rl.DrawTextEx(
+        font=font,
+        text=mode == .INSERT ? "-- INSERT --" : "",
+        position={5, ren_size.y - STATUS_HEIGHT},
+        fontSize=font_size,
+        spacing=0,
+        tint=theme.fg_color,
+    )
 }
