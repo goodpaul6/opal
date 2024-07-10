@@ -6,6 +6,7 @@ A native alternative to Obsidian. Only has the features I care about.
 
 - [x] Add central theme struct
 - [x] Add status bar and display current mode
+- [x] Add the ability to zoom in and out (with crisp fonts)
 - [ ] Add command input
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists

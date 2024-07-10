@@ -3,8 +3,6 @@ package main
 import "core:strings"
 import rl "vendor:raylib"
 
-STATUS_HEIGHT :: 36
-
 editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
@@ -17,9 +15,9 @@ editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
     rl.DrawRectangleRec(
         {
             x = 0,
-            y = ren_size.y - STATUS_HEIGHT,
+            y = ren_size.y - font_size,
             width = ren_size.x,
-            height = STATUS_HEIGHT
+            height = font_size
         }, 
         theme.bg_color
     )
@@ -27,7 +25,7 @@ editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
     rl.DrawTextEx(
         font=font,
         text=strings.clone_to_cstring(strings.to_string(status), context.temp_allocator),
-        position={5, ren_size.y - STATUS_HEIGHT},
+        position={5, ren_size.y - font_size},
         fontSize=font_size,
         spacing=0,
         tint=theme.fg_color,

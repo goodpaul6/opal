@@ -21,7 +21,9 @@ main :: proc() {
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(TARGET_FPS)
 
-    theme := theme_make_default()
+    zoom_level := 0
+
+    theme := theme_make_default(zoom_level)
     defer theme_destroy(&theme)
 
     ed := Editor{}
@@ -59,6 +61,26 @@ main :: proc() {
             key := rl.GetKeyPressed()
             if key == .KEY_NULL {
                 break
+            }
+
+            if key == .EQUAL && is_ctrl_pressed {
+                zoom_level += 1
+                zoom_level = min(zoom_level, len(THEME_ZOOM_LEVEL_TO_FONT_SIZE) - 1)
+
+                theme_destroy(&theme)
+                theme = theme_make_default(zoom_level)
+
+                continue
+            }
+
+            if key == .MINUS && is_ctrl_pressed {
+                zoom_level -= 1
+                zoom_level = max(zoom_level, 0)
+
+                theme_destroy(&theme)
+                theme = theme_make_default(zoom_level)
+
+                continue
             }
 
             editor_handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
