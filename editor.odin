@@ -19,6 +19,7 @@ Editor :: struct {
     sel: [2]int,
     sb: strings.Builder,
     state: te.State,
+    status: string,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {

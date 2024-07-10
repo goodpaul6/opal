@@ -5,7 +5,7 @@ A native alternative to Obsidian. Only has the features I care about.
 ## TODO
 
 - [x] Add central theme struct
-- [ ] Add status bar and display current mode
+- [x] Add status bar and display current mode
 - [ ] Add command input
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists

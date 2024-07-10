@@ -3,7 +3,36 @@ package main
 import "core:strings"
 import rl "vendor:raylib"
 
-STATUS_HEIGHT :: 24
+STATUS_HEIGHT :: 36
+
+editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
+    font := theme.fonts[.BODY]
+    font_size := f32(font.baseSize)
+
+    ren_size := [?]f32{
+        f32(rl.GetRenderWidth()), 
+        f32(rl.GetRenderHeight()),
+    }
+
+    rl.DrawRectangleRec(
+        {
+            x = 0,
+            y = ren_size.y - STATUS_HEIGHT,
+            width = ren_size.x,
+            height = STATUS_HEIGHT
+        }, 
+        theme.bg_color
+    )
+
+    rl.DrawTextEx(
+        font=font,
+        text=mode == .INSERT ? "-- INSERT --" : "",
+        position={5, ren_size.y - STATUS_HEIGHT},
+        fontSize=font_size,
+        spacing=0,
+        tint=theme.fg_color,
+    )
+}
 
 editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
@@ -24,7 +53,7 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
         next_line_start_byte_index := line_start_byte_index + len(line) + 1
 
         defer {
-            y_pos += 22        
+            y_pos += font_size
             line_start_byte_index = next_line_start_byte_index
         }
 
@@ -71,27 +100,5 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
         )
     }
 
-    ren_size := [?]f32{
-        f32(rl.GetRenderWidth()), 
-        f32(rl.GetRenderHeight()),
-    }
-
-    rl.DrawRectangleRec(
-        {
-            x = 0,
-            y = ren_size.y - STATUS_HEIGHT,
-            width = ren_size.x,
-            height = STATUS_HEIGHT
-        }, 
-        theme.bg_color
-    )
-
-    rl.DrawTextEx(
-        font=font,
-        text=mode == .INSERT ? "-- INSERT --" : "",
-        position={5, ren_size.y - STATUS_HEIGHT},
-        fontSize=font_size,
-        spacing=0,
-        tint=theme.fg_color,
-    )
+    editor_draw_status(ed, theme)
 }

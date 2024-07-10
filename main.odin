@@ -73,6 +73,8 @@ main :: proc() {
         rl.BeginDrawing()
             rl.ClearBackground(theme.bg_color)
 
+            rl.DrawFPS(500, 10)
+
             editor_draw(&ed, &theme)
         rl.EndDrawing()
 

@@ -18,9 +18,9 @@ theme_make_default :: proc() -> Theme {
     DEFAULT_FONT_DATA := #load("fonts/Inter-Regular.ttf")
     DEFAULT_PRE_FONT_DATA := #load("fonts/CommitMono-400-Regular.otf")
 
-    DEFAULT_H1_SIZE :: 36
-    DEFAULT_BODY_SIZE :: 20
-    DEFAULT_PRE_SIZE :: 20
+    DEFAULT_H1_SIZE :: 48
+    DEFAULT_BODY_SIZE :: 36
+    DEFAULT_PRE_SIZE :: 36
 
     SUMI_INK_0 :: rl.Color{0x16, 0x16, 0x1D, 0xFF}
     FUJI_WHITE :: rl.Color{0xDC, 0xD7, 0xBA, 0xFF}
