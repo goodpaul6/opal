@@ -5,7 +5,7 @@ import rl "vendor:raylib"
 WINDOW_TITLE :: "Opal"
 WINDOW_INIT_WIDTH :: 800
 WINDOW_INIT_HEIGHT :: 450
-TARGET_FPS :: 120
+TARGET_FPS :: 240
 SECONDS_TO_FRAMES :: TARGET_FPS
 
 main :: proc() {

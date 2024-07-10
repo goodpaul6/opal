@@ -26,7 +26,7 @@ editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
 
     rl.DrawTextEx(
         font=font,
-        text=mode == .INSERT ? "-- INSERT --" : "",
+        text=strings.clone_to_cstring(strings.to_string(status), context.temp_allocator),
         position={5, ren_size.y - STATUS_HEIGHT},
         fontSize=font_size,
         spacing=0,

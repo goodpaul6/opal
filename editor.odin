@@ -19,7 +19,9 @@ Editor :: struct {
     sel: [2]int,
     sb: strings.Builder,
     state: te.State,
-    status: string,
+
+    // TODO(Apaar): We could technically use a fixed backing array for this string builder
+    status: strings.Builder,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -70,6 +72,12 @@ editor_init :: proc(using ed: ^Editor) {
     )
 
     sb = strings.builder_make()
+    status = strings.builder_make()
+}
+
+editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
+    strings.builder_reset(&status)
+    strings.write_string(&status, str)
 }
 
 editor_destroy :: proc(using ed: ^Editor) {
@@ -81,6 +89,13 @@ editor_destroy :: proc(using ed: ^Editor) {
 editor_begin_frame :: proc(using ed: ^Editor) {
     te.begin(&state, 0, &sb)
     state.selection = sel
+
+    if mode == .INSERT {
+        // TODO(Apaar): Handle arrow keys in insert mode
+        editor_set_status_to_string(ed, "-- INSERT --")
+    } else {
+        editor_set_status_to_string(ed, "")
+    }
 }
 
 editor_end_frame :: proc(using ed: ^Editor) {
@@ -184,8 +199,6 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
         }
         
         case .INSERT: {
-            // TODO(Apaar): Handle arrow keys in insert mode
-
             if key == .ESCAPE {
                 mode = .NORMAL
             }
