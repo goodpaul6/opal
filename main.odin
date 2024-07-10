@@ -21,9 +21,10 @@ main :: proc() {
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(TARGET_FPS)
 
-    zoom_level := 0
+    default_theme_data := theme_make_default_theme_data()
+    defer theme_data_destroy(&default_theme_data)
 
-    theme := theme_make_default(zoom_level)
+    theme := theme_make(&default_theme_data)
     defer theme_destroy(&theme)
 
     ed := Editor{}
@@ -64,22 +65,12 @@ main :: proc() {
             }
 
             if key == .EQUAL && is_ctrl_pressed {
-                zoom_level += 1
-                zoom_level = min(zoom_level, len(THEME_ZOOM_LEVEL_TO_FONT_SIZE) - 1)
-
-                theme_destroy(&theme)
-                theme = theme_make_default(zoom_level)
-
+                theme_set_zoom_level(&theme, theme.zoom_level + 1)
                 continue
             }
 
             if key == .MINUS && is_ctrl_pressed {
-                zoom_level -= 1
-                zoom_level = max(zoom_level, 0)
-
-                theme_destroy(&theme)
-                theme = theme_make_default(zoom_level)
-
+                theme_set_zoom_level(&theme, theme.zoom_level - 1)
                 continue
             }
 
@@ -93,7 +84,7 @@ main :: proc() {
         }
 
         rl.BeginDrawing()
-            rl.ClearBackground(theme.bg_color)
+            rl.ClearBackground(theme.data.bg_color)
 
             rl.DrawFPS(500, 10)
 

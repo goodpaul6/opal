@@ -19,7 +19,7 @@ editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
             width = ren_size.x,
             height = font_size
         }, 
-        theme.bg_color
+        theme.data.bg_color
     )
 
     rl.DrawTextEx(
@@ -28,7 +28,7 @@ editor_draw_status :: proc(using ed: ^Editor, theme: ^Theme) {
         position={5, ren_size.y - font_size},
         fontSize=font_size,
         spacing=0,
-        tint=theme.fg_color,
+        tint=theme.data.fg_color,
     )
 }
 
@@ -62,7 +62,7 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
             position={20.0, 20.0 + y_pos},
             fontSize=font_size,
             spacing=0,
-            tint=theme.fg_color,
+            tint=theme.data.fg_color,
         )
 
         if !blink || sel[0] < line_start_byte_index || sel[0] >= next_line_start_byte_index {
@@ -94,7 +94,7 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
                 width = mode == .NORMAL ? caret_w : 2,
                 height = sub_text_size.y,
             },
-            theme.fg_color,
+            theme.data.fg_color,
         )
     }
 
