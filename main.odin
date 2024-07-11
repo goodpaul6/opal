@@ -42,7 +42,7 @@ main :: proc() {
         defer editor_end_frame(&ed)
 
         switch ed.mode {
-            case .NORMAL: rl.SetMouseCursor(.DEFAULT)
+            case .NORMAL, .COMMAND: rl.SetMouseCursor(.DEFAULT)
             case .INSERT: rl.SetMouseCursor(.IBEAM)
         }
 

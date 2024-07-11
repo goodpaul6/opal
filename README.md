@@ -7,12 +7,14 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add central theme struct
 - [x] Add status bar and display current mode
 - [x] Add the ability to zoom in and out (with crisp fonts)
-- [ ] Add command input
+- [x] Add command input
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 * [ ] Add `dw` action + motion from Vim
 - [ ] Add command for new day file
 - [ ] Add forward and backward search bindings
+* [ ] Add support for pasting images
+- [ ] Create server for collaborative editing (maybe using ENet)?
 
 ## BUGS
 

@@ -2,12 +2,14 @@ package main
 
 import "core:strings"
 import "core:bytes"
+import "core:fmt"
 import te "core:text/edit"
 import rl "vendor:raylib"
 
 Editor_Mode :: enum {
     NORMAL,
     INSERT,
+    COMMAND,
 }
 
 Editor_Loc :: struct {
@@ -22,6 +24,9 @@ Editor :: struct {
 
     // TODO(Apaar): We could technically use a fixed backing array for this string builder
     status: strings.Builder,
+
+    // TODO(Apaar): Perhaps this should be managed via a text/edit state too?
+    command: strings.Builder,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -73,6 +78,7 @@ editor_init :: proc(using ed: ^Editor) {
 
     sb = strings.builder_make()
     status = strings.builder_make()
+    command = strings.builder_make()
 }
 
 editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
@@ -82,6 +88,8 @@ editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
 
 editor_destroy :: proc(using ed: ^Editor) {
     strings.builder_destroy(&sb)
+    strings.builder_destroy(&status)
+    strings.builder_destroy(&command)
 
     te.destroy(&state)
 }
@@ -90,11 +98,19 @@ editor_begin_frame :: proc(using ed: ^Editor) {
     te.begin(&state, 0, &sb)
     state.selection = sel
 
-    if mode == .INSERT {
-        // TODO(Apaar): Handle arrow keys in insert mode
-        editor_set_status_to_string(ed, "-- INSERT --")
-    } else {
-        editor_set_status_to_string(ed, "")
+    switch(mode) {
+        case .INSERT: {
+            editor_set_status_to_string(ed, "-- INSERT --")
+        }
+
+        case .NORMAL: {
+            editor_set_status_to_string(ed, "")
+        }
+
+        case .COMMAND: {
+            // HACK(Apaar): Not necessarily a good idea to hijack the status for this but ok
+            editor_set_status_to_string(ed, fmt.tprintf(":%s", strings.to_string(command)))
+        }
     }
 }
 
@@ -152,6 +168,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 }
 
                 mode = .INSERT
+            }
+
+            if key == .SEMICOLON && is_shift_pressed {
+                mode = .COMMAND
             }
 
             if key == .A {
@@ -231,7 +251,31 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 te.input_text(&state, "    ")
             }
         }
+
+        case .COMMAND: {
+            if key == .BACKSPACE {
+                // TODO(Apaar): Handle ctrl + backspace
+                strings.pop_rune(&command)
+            }
+
+            if key == .ESCAPE {
+                strings.builder_reset(&command)
+                mode = .NORMAL
+            }
+
+            if key == .ENTER {
+                // TODO(Apaar): Run command
+
+                strings.builder_reset(&command)
+                mode = .NORMAL
+            }
+        }
     }
+}
+
+@(private="file")
+is_ascii :: proc(ch: rune) -> bool {
+    return ch >= 32 && ch <= 125
 }
 
 editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
@@ -240,11 +284,20 @@ editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
         }
 
         case .INSERT: {
-            if ch < 32 || ch > 125 {
+            // TODO(Apaar): Allow non-ascii input
+            if !is_ascii(ch) {
                 break
             }
 
             te.input_rune(&state, ch)
+        }
+        
+        case .COMMAND: {
+            if !is_ascii(ch) {
+                break
+            }
+
+            strings.write_rune(&command, ch)
         }
     }
 }
