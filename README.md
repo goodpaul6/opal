@@ -9,6 +9,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add the ability to zoom in and out (with crisp fonts)
 - [x] Add command input
 * [x] Add `dw` action + motion from Vim
+- [ ] Add undo and redo
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file

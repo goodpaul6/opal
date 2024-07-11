@@ -155,7 +155,8 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
         case .K: t = .Up
         case .J: t = .Down
         case .B: t = .Word_Left
-        case .W: t = .Word_Right
+        // TODO(Apaar): Handle going to the end of the word, end of next word, etc
+        case .W, .E: t = .Word_Right
         case .ZERO: t = .Soft_Line_Start
         case .FOUR: {
             valid = is_shift_pressed
@@ -168,12 +169,25 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
+    if key == .LEFT_SHIFT || key == .RIGHT_SHIFT {
+        // This should do nothing
+        return
+    }
+
     editor_update_state_indices(ed)
 
     switch mode {
         case .NORMAL: {
             if pending_action == .DELETE {
                 pending_action = .NONE
+
+                if key == .D {
+                    // Delete the line
+                    te.move_to(&state, .Soft_Line_End)
+                    te.delete_to(&state, .Soft_Line_Start)
+                    te.delete_to(&state, .Left)
+                    break
+                }
 
                 translation, valid := key_to_translation(key, is_shift_pressed)
                 
