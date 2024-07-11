@@ -12,6 +12,11 @@ Editor_Mode :: enum {
     COMMAND,
 }
 
+Editor_Action :: enum {
+    NONE,
+    DELETE,
+}
+
 Editor_Loc :: struct {
     row, col: int,
 }
@@ -21,6 +26,8 @@ Editor :: struct {
     sel: [2]int,
     sb: strings.Builder,
     state: te.State,
+
+    pending_action: Editor_Action,
 
     // TODO(Apaar): We could technically use a fixed backing array for this string builder
     status: strings.Builder,
@@ -137,29 +144,49 @@ editor_update_state_indices :: proc(using ed: ^Editor) {
     state.down_index = editor_loc_to_byte_index({loc.row + 1, loc.col}, sb.buf[:])
 }
 
+@(private="file")
+key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: te.Translation, valid: bool) {
+    // For most cases we don't want shift to be pressed
+    valid = !is_shift_pressed
+
+    #partial switch(key) {
+        case .H: t = .Left
+        case .L: t = .Right
+        case .K: t = .Up
+        case .J: t = .Down
+        case .B: t = .Word_Left
+        case .W: t = .Word_Right
+        case .ZERO: t = .Soft_Line_Start
+        case .FOUR: {
+            valid = is_shift_pressed
+            t = .Soft_Line_End
+        }
+        case: valid = false
+    }
+
+    return
+}
+
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
     editor_update_state_indices(ed)
 
     switch mode {
         case .NORMAL: {
+            if pending_action == .DELETE {
+                pending_action = .NONE
+
+                translation, valid := key_to_translation(key, is_shift_pressed)
+                
+                if !valid {
+                    break
+                }
+
+                te.delete_to(&state, translation)
+                break
+            }
+
             if key == .X {
                 te.delete_to(&state, .Right)
-            }
-
-            if key == .H {
-                te.move_to(&state, .Left)
-            }
-
-            if key == .L {
-                te.move_to(&state, .Right)
-            }
-
-            if key == .K {
-                te.move_to(&state, .Up)
-            }
-
-            if key == .J {
-                te.move_to(&state, .Down)
             }
 
             if key == .I {
@@ -201,20 +228,15 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 mode = .INSERT
             }
 
-            if key == .B {
-                te.move_to(&state, .Word_Left)
+            if key == .D {
+                pending_action = .DELETE
+                break
             }
 
-            if key == .E {
-                te.move_to(&state, .Word_Right)
-            }
+            translation, valid := key_to_translation(key, is_shift_pressed)
 
-            if key == .ZERO {
-                te.move_to(&state, .Soft_Line_Start)
-            }
-
-            if key == .FOUR && is_shift_pressed {
-                te.move_to(&state, .Soft_Line_End)
+            if valid {
+                te.move_to(&state, translation)
             }
         }
         

@@ -4,7 +4,15 @@ import "core:strings"
 import rl "vendor:raylib"
 
 @(private="file")
-draw_line :: proc(using ed: ^Editor, theme: ^Theme, line: string, pos: [2]f32, caret_pos: int, fixed_caret_w: f32) {
+draw_line :: proc(
+    using ed: ^Editor, 
+    theme: ^Theme, 
+    line: string, 
+    pos: [2]f32, 
+    caret_pos: int, 
+    fixed_caret_w: f32, 
+    chop_caret: bool
+) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
@@ -44,9 +52,9 @@ draw_line :: proc(using ed: ^Editor, theme: ^Theme, line: string, pos: [2]f32, c
     rl.DrawRectangleRec(
         rl.Rectangle{
             x = pos.x + sub_text_size.x,
-            y = pos.y,
+            y = pos.y + (chop_caret ? sub_text_size.y / 2 : 0),
             width = fixed_caret_w > 0 ? fixed_caret_w : calc_caret_w,
-            height = sub_text_size.y,
+            height = chop_caret ? sub_text_size.y / 2 : sub_text_size.y,
         },
         theme.data.fg_color,
     )
@@ -81,7 +89,7 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
             caret_pos = sel[0] - line_start_byte_index
         }
 
-        draw_line(ed, theme, line, {20.0, 20.0 + y_pos}, caret_pos, fixed_caret_w=mode == .INSERT ? 2 : 0)
+        draw_line(ed, theme, line, {20.0, 20.0 + y_pos}, caret_pos, fixed_caret_w=mode == .INSERT ? 2 : 0, chop_caret=pending_action != .NONE)
     }
 
     {
@@ -105,6 +113,6 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
         // Only draw caret if in command mode
         caret_pos := mode == .COMMAND ? len(status.buf) : -1
 
-        draw_line(ed, theme, strings.to_string(status), {0, ren_size.y - font_size}, caret_pos, fixed_caret_w=2)
+        draw_line(ed, theme, strings.to_string(status), {0, ren_size.y - font_size}, caret_pos, fixed_caret_w=2, chop_caret=false)
     }
 }
