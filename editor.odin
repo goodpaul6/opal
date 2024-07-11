@@ -3,6 +3,7 @@ package main
 import "core:strings"
 import "core:bytes"
 import "core:fmt"
+import "core:slice"
 import te "core:text/edit"
 import rl "vendor:raylib"
 
@@ -21,6 +22,24 @@ Editor_Loc :: struct {
     row, col: int,
 }
 
+// See https://rxi.github.io/a_simple_undo_system.html
+// for how the undo system works
+Editor_Undo_Tracker :: struct {
+    orig_data: []byte,
+    data: union #shared_nil {^[dynamic]byte, ^[]byte}
+    
+    // If data and temp data differ at commit time, then we know there's stuff to undo
+}
+
+// NOTE(Apaar): A zero-valued (i.e. data == nil) undo item is used to delimit "batches" of undos.
+// When somebody hits undo, we loop through all the undos until we hit a nil.
+Editor_Undo_Item :: struct {
+    // TODO(Apaar): Allow updating a portion of the destination
+
+    data: []byte,
+    dest: union #shared_nil {^[dynamic]byte, ^[]byte},
+}
+
 Editor :: struct {
     mode: Editor_Mode,
     sel: [2]int,
@@ -34,6 +53,9 @@ Editor :: struct {
 
     // TODO(Apaar): Perhaps this should be managed via a text/edit state too?
     command: strings.Builder,
+
+    undo_trackers: [dynamic]Editor_Undo_Tracker,
+    undos: [dynamic]Editor_Undo_Item,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -99,6 +121,67 @@ editor_destroy :: proc(using ed: ^Editor) {
     strings.builder_destroy(&command)
 
     te.destroy(&state)
+}
+
+editor_undo_track :: proc(using ed: ^Editor, data: ^$T) {
+    append(&undo_trackers, Editor_Undo_Tracker{
+        orig_data = slice.clone(data[:]),
+        data = data,
+    })
+}
+
+editor_undo_commit :: proc(using ed: ^Editor) {
+    for tracker in undo_trackers {
+        is_equal := false
+
+        switch v in tracker.data {
+            case ^[dynamic]byte: is_equal = slice.equal(tracker.orig_data, v[:])
+            case ^[]byte: is_equal = slice.equal(tracker.orig_data, v[:])
+        }
+
+        if is_equal {
+            delete(tracker.orig_data)
+            continue
+        }
+
+        if len(undos) == 0 || slice.last(undos[:]).dest != nil {
+            // Add nil undo item
+            append(&undos, Editor_Undo_Item{})
+        }
+
+        append(&undos, Editor_Undo_Item{
+            data = tracker.orig_data,
+            dest = tracker.data,
+        })
+    }
+
+    clear(&undo_trackers)
+}
+
+editor_undo :: proc(using ed: ^Editor) {
+    for {
+        undo_item := pop_safe(&undos) or_break
+
+        if undo_item.dest == nil {
+            break
+        }
+
+        dest_slice: []byte
+
+        switch v in undo_item.dest {
+            case ^[dynamic]byte:
+                resize(v, len(undo_item.data))
+                dest_slice = v[:]
+
+            case ^[]byte:
+                dest_slice = v[:]
+        }
+
+        copy(dest_slice, undo_item.data)
+        delete(undo_item.data)
+
+        state.selection = {0, 0}
+    }
 }
 
 editor_begin_frame :: proc(using ed: ^Editor) {
@@ -179,6 +262,9 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
     switch mode {
         case .NORMAL: {
             if pending_action == .DELETE {
+                editor_undo_track(ed, &sb.buf)
+                defer editor_undo_commit(ed)
+
                 pending_action = .NONE
 
                 if key == .D {
@@ -199,7 +285,14 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 break
             }
 
+            if key == .U {
+                editor_undo(ed)
+            }
+
             if key == .X {
+                editor_undo_track(ed, &sb.buf)
+                defer editor_undo_commit(ed)
+
                 te.delete_to(&state, .Right)
             }
 
@@ -209,6 +302,9 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 }
 
                 mode = .INSERT
+
+                // Start tracking now and don't commit until we exit insert mode
+                editor_undo_track(ed, &sb.buf)
             }
 
             if key == .SEMICOLON && is_shift_pressed {
@@ -226,6 +322,8 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .O {
+                editor_undo_track(ed, &sb.buf)
+
                 if is_shift_pressed {
                     te.move_to(&state, .Soft_Line_Start)
                     te.input_text(&state, "\n")
@@ -256,10 +354,12 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
         
         case .INSERT: {
             if key == .ESCAPE {
+                editor_undo_commit(ed)
                 mode = .NORMAL
             }
 
             if key == .LEFT_BRACKET && is_ctrl_pressed {
+                editor_undo_commit(ed)
                 mode = .NORMAL
             }
 
