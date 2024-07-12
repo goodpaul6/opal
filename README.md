@@ -11,8 +11,8 @@ A native alternative to Obsidian. Only has the features I care about.
 * [x] Add `dw` action + motion from Vim
 - [x] Add support for undo
 - [x] Refactor undo code to be less clown
+- [x] Add support for scrolling
 - [ ] Add support for redo
-- [ ] Add support for scrolling
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file

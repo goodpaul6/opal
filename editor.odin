@@ -43,9 +43,12 @@ Editor_Undo_Item :: struct {
 
 Editor :: struct {
     mode: Editor_Mode,
-    sel: [2]int,
+
     sb: strings.Builder,
     state: te.State,
+
+    prev_frame_sel: [2]int,
+    scroll_row: int,
 
     pending_action: Editor_Action,
 
@@ -191,7 +194,7 @@ editor_undo :: proc(using ed: ^Editor) {
 
 editor_begin_frame :: proc(using ed: ^Editor) {
     te.begin(&state, 0, &sb)
-    state.selection = sel
+    state.selection = prev_frame_sel
 
     switch(mode) {
         case .INSERT: {
@@ -210,7 +213,7 @@ editor_begin_frame :: proc(using ed: ^Editor) {
 }
 
 editor_end_frame :: proc(using ed: ^Editor) {
-    sel = state.selection
+    prev_frame_sel = state.selection
     te.end(&state)
 }
 
@@ -257,9 +260,10 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
 }
 
 @(private="file")
-track_text_and_sel :: proc(using ed: ^Editor) {
+track_text_and_pos :: proc(using ed: ^Editor) {
     editor_undo_track(ed, &sb.buf)
     editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+    editor_undo_track(ed, mem.ptr_to_bytes(&scroll_row))
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
@@ -273,7 +277,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
     switch mode {
         case .NORMAL: {
             if pending_action == .DELETE {
-                track_text_and_sel(ed)
+                track_text_and_pos(ed)
                 defer editor_undo_commit(ed)
 
                 pending_action = .NONE
@@ -315,7 +319,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 mode = .INSERT
 
                 // Start tracking now and don't commit until we exit insert mode
-                track_text_and_sel(ed)
+                track_text_and_pos(ed)
             }
 
             if key == .SEMICOLON && is_shift_pressed {
@@ -323,7 +327,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .A {
-                track_text_and_sel(ed)
+                track_text_and_pos(ed)
 
                 if is_shift_pressed {
                     te.move_to(&state, .Soft_Line_End)
@@ -335,7 +339,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .O {
-                track_text_and_sel(ed)
+                track_text_and_pos(ed)
 
                 if is_shift_pressed {
                     te.move_to(&state, .Soft_Line_Start)
@@ -377,7 +381,8 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .BACKSPACE {
-                sel_pos := sel[0]
+                sel_pos := state.selection[0]
+
                 is_at_soft_tab := 
                     (sel_pos - 4) >= 0 && 
                     string(sb.buf[sel_pos - 4:sel_pos]) == "    "

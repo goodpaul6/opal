@@ -83,6 +83,8 @@ main :: proc() {
             }
         }
 
+        editor_scroll_cursor_into_view(&ed, &theme)
+
         rl.BeginDrawing()
             rl.ClearBackground(theme.data.bg_color)
 

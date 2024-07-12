@@ -62,9 +62,37 @@ draw_line :: proc(
     )
 }
 
-editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
+@(private="file")
+lines_per_page :: proc(font_size: f32) -> int {
+    // Subtract font_size for the status bar
+    rh := f32(rl.GetRenderHeight()) - font_size
+
+    return int(rh / font_size)
+}
+
+editor_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
+
+    loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
+
+    if loc.row < scroll_row {
+        scroll_row = loc.row
+        return
+    }
+
+    lpp := lines_per_page(font_size)
+
+    if loc.row >= scroll_row + lpp {
+        scroll_row = loc.row - lpp + 1
+    }
+}
+
+editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
+    font := theme.fonts[.BODY]
+    font_size := f32(font.baseSize)
+
+    lpp := lines_per_page(font_size)
 
     blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
@@ -78,20 +106,27 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
 
         line_start_byte_index := 0
 
-        for line in lines {
+        for line, line_idx in lines {
             // + 1 for newline char
             next_line_start_byte_index := line_start_byte_index + len(line) + 1
+            defer line_start_byte_index = next_line_start_byte_index
 
-            defer {
-                y_pos += font_size
-                line_start_byte_index = next_line_start_byte_index
+            // TODO(Apaar): Compute lines per page and don't render anything below.
+            if line_idx < scroll_row {
+                continue
             }
+
+            if line_idx >= scroll_row + lpp {
+                break
+            }
+
+            defer y_pos += font_size
 
             // No caret by default
             caret_pos := -1
 
-            if mode != .COMMAND && blink && sel[0] >= line_start_byte_index && sel[0] < next_line_start_byte_index {
-                caret_pos = sel[0] - line_start_byte_index
+            if mode != .COMMAND && blink && state.selection[0] >= line_start_byte_index && state.selection[0] < next_line_start_byte_index {
+                caret_pos = state.selection[0] - line_start_byte_index
             }
 
             draw_line(
