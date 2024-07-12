@@ -30,7 +30,7 @@ Theme :: struct {
     fonts: [Theme_Font_Variant]rl.Font,
 }
 
-theme_make_default_theme_data :: proc() -> Theme_Data {
+theme_data_make_default :: proc() -> Theme_Data {
     INTER_DATA := #load("fonts/Inter-Regular.ttf")
     COMMIT_MONO_DATA := #load("fonts/CommitMono-400-Regular.otf")
 
@@ -68,9 +68,9 @@ theme_make_default_theme_data :: proc() -> Theme_Data {
         }),
 
         font_data = {
-            .H1 = INTER_DATA,
-            .BODY = INTER_DATA,
-            .PRE = COMMIT_MONO_DATA,
+            .H1 = slice.clone(INTER_DATA[:]),
+            .BODY = slice.clone(INTER_DATA[:]),
+            .PRE = slice.clone(COMMIT_MONO_DATA[:]),
         },
 
         bg_color = {0x16, 0x16, 0x1D, 0xFF},
@@ -78,9 +78,12 @@ theme_make_default_theme_data :: proc() -> Theme_Data {
     }
 }
 
-theme_data_destroy :: proc(data: ^Theme_Data) {
-    // TODO(Apaar): Delete font data as well
-    delete(data.zoom_level_to_font_sizes)
+theme_data_destroy :: proc(using data: ^Theme_Data) {
+    delete(zoom_level_to_font_sizes)
+
+    for variant in Theme_Font_Variant {
+        delete(font_data[variant])
+    }
 }
 
 theme_make :: proc(data: ^Theme_Data, zoom_level := 0) -> Theme {
@@ -118,19 +121,18 @@ theme_make :: proc(data: ^Theme_Data, zoom_level := 0) -> Theme {
     }
 }
 
-@(private="file")
-unload_fonts :: proc(using theme: ^Theme) {
+theme_destroy :: proc(using theme: ^Theme) {
     for &font in fonts {
         rl.UnloadFont(font)
     }
 }
 
 theme_set_zoom_level :: proc(theme: ^Theme, raw_zoom_level: int) {
-    zoom_level := clamp(raw_zoom_level, 0, len(theme.data.zoom_level_to_font_sizes) - 1)
+    data := theme.data
+    theme_destroy(theme)
 
-    theme^ = theme_make(theme.data, zoom_level)
+    zoom_level := clamp(raw_zoom_level, 0, len(data.zoom_level_to_font_sizes) - 1)
+
+    theme^ = theme_make(data, zoom_level)
 }
 
-theme_destroy :: proc(theme: ^Theme) {
-    unload_fonts(theme)
-}

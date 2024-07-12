@@ -21,7 +21,7 @@ main :: proc() {
     rl.SetExitKey(.KEY_NULL)
     rl.SetTargetFPS(TARGET_FPS)
 
-    default_theme_data := theme_make_default_theme_data()
+    default_theme_data := theme_data_make_default()
     defer theme_data_destroy(&default_theme_data)
 
     theme := theme_make(&default_theme_data)

@@ -3,6 +3,8 @@ package main
 import "core:strings"
 import rl "vendor:raylib"
 
+INSERT_CARET_W :: 2
+
 @(private="file")
 draw_line :: proc(
     using ed: ^Editor, 
@@ -66,30 +68,42 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
 
     blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
-    y_pos: f32 = 0
+    {
+        // Draw text lines
 
-    text := strings.to_string(sb)
-    lines := strings.split_lines(text, context.temp_allocator)
+        y_pos: f32 = 0
 
-    line_start_byte_index := 0
+        text := strings.to_string(sb)
+        lines := strings.split_lines(text, context.temp_allocator)
 
-    for line in lines {
-        // + 1 for newline char
-        next_line_start_byte_index := line_start_byte_index + len(line) + 1
+        line_start_byte_index := 0
 
-        defer {
-            y_pos += font_size
-            line_start_byte_index = next_line_start_byte_index
+        for line in lines {
+            // + 1 for newline char
+            next_line_start_byte_index := line_start_byte_index + len(line) + 1
+
+            defer {
+                y_pos += font_size
+                line_start_byte_index = next_line_start_byte_index
+            }
+
+            // No caret by default
+            caret_pos := -1
+
+            if mode != .COMMAND && blink && sel[0] >= line_start_byte_index && sel[0] < next_line_start_byte_index {
+                caret_pos = sel[0] - line_start_byte_index
+            }
+
+            draw_line(
+                ed, 
+                theme, 
+                line, 
+                {20.0, 20.0 + y_pos}, 
+                caret_pos, 
+                fixed_caret_w=mode == .INSERT ? INSERT_CARET_W : 0, 
+                chop_caret=pending_action != .NONE,
+            )
         }
-
-        // No caret by default
-        caret_pos := -1
-        
-        if mode != .COMMAND && blink && sel[0] >= line_start_byte_index && sel[0] < next_line_start_byte_index {
-            caret_pos = sel[0] - line_start_byte_index
-        }
-
-        draw_line(ed, theme, line, {20.0, 20.0 + y_pos}, caret_pos, fixed_caret_w=mode == .INSERT ? 2 : 0, chop_caret=pending_action != .NONE)
     }
 
     {
@@ -113,6 +127,14 @@ editor_draw :: proc (using ed: ^Editor, theme: ^Theme) {
         // Only draw caret if in command mode
         caret_pos := mode == .COMMAND ? len(status.buf) : -1
 
-        draw_line(ed, theme, strings.to_string(status), {0, ren_size.y - font_size}, caret_pos, fixed_caret_w=2, chop_caret=false)
+        draw_line(
+            ed, 
+            theme, 
+            strings.to_string(status), 
+            {0, ren_size.y - font_size}, 
+            caret_pos, 
+            fixed_caret_w=INSERT_CARET_W, 
+            chop_caret=false
+        )
     }
 }

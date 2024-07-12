@@ -256,6 +256,12 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
     return
 }
 
+@(private="file")
+track_text_and_sel :: proc(using ed: ^Editor) {
+    editor_undo_track(ed, &sb.buf)
+    editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+}
+
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
     if key == .LEFT_SHIFT || key == .RIGHT_SHIFT {
         // This should do nothing
@@ -267,8 +273,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
     switch mode {
         case .NORMAL: {
             if pending_action == .DELETE {
-                editor_undo_track(ed, &sb.buf)
-                editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+                track_text_and_sel(ed)
                 defer editor_undo_commit(ed)
 
                 pending_action = .NONE
@@ -310,8 +315,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 mode = .INSERT
 
                 // Start tracking now and don't commit until we exit insert mode
-                editor_undo_track(ed, &sb.buf)
-                editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+                track_text_and_sel(ed)
             }
 
             if key == .SEMICOLON && is_shift_pressed {
@@ -319,8 +323,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .A {
-                editor_undo_track(ed, &sb.buf)
-                editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+                track_text_and_sel(ed)
 
                 if is_shift_pressed {
                     te.move_to(&state, .Soft_Line_End)
@@ -332,8 +335,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .O {
-                editor_undo_track(ed, &sb.buf)
-                editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+                track_text_and_sel(ed)
 
                 if is_shift_pressed {
                     te.move_to(&state, .Soft_Line_Start)
