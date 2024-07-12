@@ -59,7 +59,9 @@ Editor :: struct {
     command: strings.Builder,
 
     undo_trackers: [dynamic]Editor_Undo_Tracker,
+
     undos: [dynamic]Editor_Undo_Item,
+    redos: [dynamic]Editor_Undo_Item,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -135,10 +137,12 @@ editor_undo_track :: proc(using ed: ^Editor, data: $T) {
 }
 
 editor_undo_commit :: proc(using ed: ^Editor) {
-    if len(undos) == 0 || slice.last(undos[:]).dest != nil {
-        // Add nil undo item
-        append(&undos, Editor_Undo_Item{})
+    for &item in redos {
+        delete(item.data)
     }
+    clear(&redos)
+
+    placed_nil := false
 
     for tracker in undo_trackers {
         is_equal := false
@@ -153,6 +157,12 @@ editor_undo_commit :: proc(using ed: ^Editor) {
             continue
         }
 
+        if !placed_nil {
+            // Add nil undo item to delimit changes
+            append(&undos, Editor_Undo_Item{})
+            placed_nil = true
+        }
+
         item := Editor_Undo_Item{
             data = tracker.orig_data,
             dest = tracker.data,
@@ -164,32 +174,65 @@ editor_undo_commit :: proc(using ed: ^Editor) {
     clear(&undo_trackers)
 }
 
-editor_undo :: proc(using ed: ^Editor) {
-    for {
-        undo_item := pop_safe(&undos) or_break
+editor_apply_undo_items :: proc(
+    using ed: ^Editor, 
+    // If this is 'undos', 'reverse_items' is 'redos' and vice versa
+    items: ^[dynamic]Editor_Undo_Item, 
+    reverse_items: ^[dynamic]Editor_Undo_Item
+) {
+    placed_nil := false
 
-        if undo_item.dest == nil {
+    for {
+        item := pop_safe(items) or_break
+
+        if item.dest == nil {
             break
         }
 
-        dest_slice: []byte
+        if !placed_nil {
+            // Add nil item to other stack to delimit changes
+            append(reverse_items, Editor_Undo_Item{})
+            placed_nil = true
+        }
 
-        switch v in undo_item.dest {
+        // We also push the _current_ state of undo_item.dest onto the redo stack
+        switch v in item.dest {
             case ^[dynamic]byte:
-                resize(v, len(undo_item.data))
-                dest_slice = v[:]
+                reverse_item := Editor_Undo_Item{
+                    data = slice.clone(v[:]),
+                    dest = item.dest,
+                }
+
+                append(reverse_items, reverse_item)
+
+                resize(v, len(item.data))
+                copy(v[:], item.data)
+                delete(item.data)
 
             case []byte:
-                dest_slice = v[:]
+                // HACK(Apaar): Copy-pasta from above, but meh
+                reverse_item := Editor_Undo_Item{
+                    data = slice.clone(v[:]),
+                    dest = item.dest,
+                }
+
+                append(reverse_items, reverse_item)
 
                 // Slices should only be tracked when the data does not change in size (even if it is modified).
                 // If the size changes, then you better use a dynamic array.
-                // assert(len(dest_slice) == len(undo_item.data))
+                assert(len(v) == len(item.data))
+                copy(v[:], item.data)
+                delete(item.data)
         }
-
-        copy(dest_slice, undo_item.data)
-        delete(undo_item.data)
     }
+}
+
+editor_undo :: proc(using ed: ^Editor) {
+    editor_apply_undo_items(ed, &undos, &redos)
+}
+
+editor_redo :: proc(using ed: ^Editor) {
+    editor_apply_undo_items(ed, &redos, &undos)
 }
 
 editor_begin_frame :: proc(using ed: ^Editor) {
@@ -267,7 +310,7 @@ track_text_and_pos :: proc(using ed: ^Editor) {
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
-    if key == .LEFT_SHIFT || key == .RIGHT_SHIFT {
+    if key == .LEFT_SHIFT || key == .RIGHT_SHIFT || key == .LEFT_CONTROL || key == .RIGHT_CONTROL {
         // This should do nothing
         return
     }
@@ -302,6 +345,10 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
 
             if key == .U {
                 editor_undo(ed)
+            }
+
+            if key == .R && is_ctrl_pressed {
+                editor_redo(ed)
             }
 
             if key == .X {

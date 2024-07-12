@@ -12,7 +12,8 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for undo
 - [x] Refactor undo code to be less clown
 - [x] Add support for scrolling
-- [ ] Add support for redo
+- [x] Add support for redo
+- [ ] Factor our modifier keys into their own struct
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
