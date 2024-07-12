@@ -104,13 +104,9 @@ editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
         text := strings.to_string(sb)
         lines := strings.split_lines(text, context.temp_allocator)
 
-        line_start_byte_index := 0
+        loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
 
         for line, line_idx in lines {
-            // + 1 for newline char
-            next_line_start_byte_index := line_start_byte_index + len(line) + 1
-            defer line_start_byte_index = next_line_start_byte_index
-
             // TODO(Apaar): Compute lines per page and don't render anything below.
             if line_idx < scroll_row {
                 continue
@@ -125,8 +121,8 @@ editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
             // No caret by default
             caret_pos := -1
 
-            if mode != .COMMAND && blink && state.selection[0] >= line_start_byte_index && state.selection[0] < next_line_start_byte_index {
-                caret_pos = state.selection[0] - line_start_byte_index
+            if mode != .COMMAND && blink && line_idx == loc.row {
+                caret_pos = loc.col
             }
 
             draw_line(

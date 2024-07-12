@@ -13,13 +13,18 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Refactor undo code to be less clown
 - [x] Add support for scrolling
 - [x] Add support for redo
+- [ ] Add line wrapping
+- [ ] Add margin to left and right side when rendering
+- [ ] Add support for saving and loading
 - [ ] Factor our modifier keys into their own struct
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
 - [ ] Add forward and backward search bindings
 * [ ] Add support for pasting images
-- [ ] Create server for collaborative editing (maybe using ENet)?
+- [ ] Add command to push the current document to `opalnotebook.com`
+- [ ] Detect conflicts document push similar to how Git's `--force-with-lease` works
+- [ ] Create server for live collaborative editing (maybe using GGPO lol)?
 
 ## BUGS
 
