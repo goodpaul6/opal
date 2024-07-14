@@ -55,8 +55,10 @@ main :: proc() {
             editor_handle_charpress(&ed, ch)
         }
 
-        is_ctrl_pressed := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-        is_shift_pressed := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+        key_mods := Editor_Key_Mod_State{}
+
+        if rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) do key_mods += {.CTRL}
+        if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) do key_mods += {.SHIFT}
 
         for {
             key := rl.GetKeyPressed()
@@ -64,22 +66,22 @@ main :: proc() {
                 break
             }
 
-            if key == .EQUAL && is_ctrl_pressed {
+            if key == .EQUAL && .CTRL in key_mods {
                 theme_set_zoom_level(&theme, theme.zoom_level + 1)
                 continue
             }
 
-            if key == .MINUS && is_ctrl_pressed {
+            if key == .MINUS && .CTRL in key_mods {
                 theme_set_zoom_level(&theme, theme.zoom_level - 1)
                 continue
             }
 
-            editor_handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
+            editor_handle_keypress(&ed, key, key_mods)
         }
 
         for key in rl.KeyboardKey {
             if key_repeat_should_repeat(&kr, key, 0.4 * SECONDS_TO_FRAMES, 5) {
-                editor_handle_keypress(&ed, key, is_ctrl_pressed, is_shift_pressed)
+                editor_handle_keypress(&ed, key, key_mods)
             }
         }
 

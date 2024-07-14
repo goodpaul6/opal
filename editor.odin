@@ -19,6 +19,13 @@ Editor_Action :: enum {
     DELETE,
 }
 
+Editor_Key_Mod :: enum {
+    CTRL,
+    SHIFT,
+}
+
+Editor_Key_Mod_State :: bit_set[Editor_Key_Mod]
+
 Editor_Loc :: struct {
     row, col: int,
 }
@@ -211,7 +218,7 @@ track_text_and_pos :: proc(using ed: ^Editor) {
     editor_undo_track(ed, mem.ptr_to_bytes(&scroll_row))
 }
 
-editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_pressed: bool, is_shift_pressed: bool) {
+editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
     if key == .LEFT_SHIFT || key == .RIGHT_SHIFT || key == .LEFT_CONTROL || key == .RIGHT_CONTROL {
         // This should do nothing
         return
@@ -235,7 +242,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                     break
                 }
 
-                translation, valid := key_to_translation(key, is_shift_pressed)
+                translation, valid := key_to_translation(key, .SHIFT in mods)
                 
                 if !valid {
                     break
@@ -249,7 +256,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 editor_undo(ed)
             }
 
-            if key == .R && is_ctrl_pressed {
+            if key == .R && .CTRL in mods {
                 editor_redo(ed)
             }
 
@@ -261,7 +268,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             }
 
             if key == .I {
-                if is_shift_pressed {
+                if .SHIFT in mods {
                     te.move_to(&state, .Soft_Line_Start)
                 }
 
@@ -271,14 +278,14 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 track_text_and_pos(ed)
             }
 
-            if key == .SEMICOLON && is_shift_pressed {
+            if key == .SEMICOLON && .SHIFT in mods {
                 mode = .COMMAND
             }
 
             if key == .A {
                 track_text_and_pos(ed)
 
-                if is_shift_pressed {
+                if .SHIFT in mods {
                     te.move_to(&state, .Soft_Line_End)
                 } else {
                     te.move_to(&state, .Right)
@@ -290,7 +297,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
             if key == .O {
                 track_text_and_pos(ed)
 
-                if is_shift_pressed {
+                if .SHIFT in mods {
                     te.move_to(&state, .Soft_Line_Start)
                     te.input_text(&state, "\n")
                     te.move_to(&state, .Left)
@@ -311,7 +318,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 break
             }
 
-            translation, valid := key_to_translation(key, is_shift_pressed)
+            translation, valid := key_to_translation(key, .SHIFT in mods)
 
             if valid {
                 te.move_to(&state, translation)
@@ -324,7 +331,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                 mode = .NORMAL
             }
 
-            if key == .LEFT_BRACKET && is_ctrl_pressed {
+            if key == .LEFT_BRACKET && .CTRL in mods {
                 editor_undo_commit(ed)
                 mode = .NORMAL
             }
@@ -336,7 +343,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, is_ctrl_p
                     (sel_pos - 4) >= 0 && 
                     string(sb.buf[sel_pos - 4:sel_pos]) == "    "
 
-                if is_ctrl_pressed {
+                if .CTRL in mods {
                     te.delete_to(&state, .Word_Left)
                 } else if !is_at_soft_tab {
                     te.delete_to(&state, .Left)

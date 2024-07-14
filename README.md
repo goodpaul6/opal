@@ -14,9 +14,9 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for scrolling
 - [x] Add support for redo
 - [x] Add line wrapping
+- [x] Factor our modifier keys into bit_field
 - [ ] Add margin to left and right side when rendering
 - [ ] Add support for saving and loading
-- [ ] Factor our modifier keys into their own struct
 - [ ] Add support for repeat (`.`), very tricky
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
