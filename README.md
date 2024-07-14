@@ -25,7 +25,8 @@ A native alternative to Obsidian. Only has the features I care about.
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
 - [ ] Add forward and backward search bindings
-* [ ] Add support for pasting images
+* [ ] Add support for copy/paste of text
+* [ ] Add support for copy/paste of images
 - [ ] Add command to push the current document to `opalnotebook.com`
 - [ ] Detect conflicts document push similar to how Git's `--force-with-lease` works
 - [ ] Create server for live collaborative editing (maybe using GGPO lol)?
