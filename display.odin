@@ -19,7 +19,7 @@ draw_line :: proc(
     font_size := f32(font.baseSize)
 
     text := strings.clone_to_cstring(line, context.temp_allocator)
- 
+
     rl.DrawTextEx(
         font=font,
         text=text,
@@ -63,21 +63,13 @@ draw_line :: proc(
 }
 
 @(private="file")
-lines_per_page :: proc(font_size: f32) -> int {
-    // Subtract font_size for the status bar
-    rh := f32(rl.GetRenderHeight()) - font_size
-
-    return int(rh / font_size)
-}
-
-@(private="file")
 wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> ([dynamic]string, Editor_Loc) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
     orig_loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
     orig_lines := strings.split_lines(string(sb.buf[:]), context.temp_allocator)
-    
+
     loc := orig_loc
     lines := make([dynamic]string, 0, len(orig_lines), context.temp_allocator)
 
@@ -169,7 +161,7 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
         append(&lines, strings.clone(string(line_builder.buf[:]), context.temp_allocator))
         strings.builder_reset(&line_builder)
     }
-    
+
     // Just append a space char to get the user started in terms
     // of showing a caret
     append(&lines, strings.clone(" ", context.temp_allocator))
@@ -178,8 +170,13 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
 }
 
 // Sets up display state that will use used throughout display calls
-editor_display_begin :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) {
-    wrapped_lines, wrapped_loc = wrapped_lines_and_loc(ed, theme, wrap_w)
+editor_display_begin :: proc(
+    using ed: ^Editor, 
+    theme: ^Theme, 
+    bounds: rl.Rectangle
+) {
+    display.bounds = bounds
+    display.wrapped_lines, display.wrapped_loc = wrapped_lines_and_loc(ed, theme, bounds.width)
 }
 
 // Cleans up display state
@@ -191,61 +188,69 @@ editor_display_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme)
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
-    if wrapped_loc.row < scroll_row {
-        scroll_row = wrapped_loc.row
+    if display.wrapped_loc.row < display.scroll_row {
+        display.scroll_row = display.wrapped_loc.row
         return
     }
 
-    lpp := lines_per_page(font_size)
+    page_line_count := int(display.bounds.height / font_size)
 
-    if wrapped_loc.row >= scroll_row + lpp - 1 {
-        scroll_row = wrapped_loc.row - lpp + 1
+    if display.wrapped_loc.row >= display.scroll_row + page_line_count {
+        display.scroll_row = display.wrapped_loc.row - page_line_count + 1
     }
+}
+
+editor_status_line_height :: proc(theme: ^Theme) -> f32{
+    return f32(theme.fonts[.BODY].baseSize)
 }
 
 editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
-    lpp := lines_per_page(font_size)
-
     blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
     {
         // Draw text lines
 
-        y_pos: f32 = 0
-
         text := strings.to_string(sb)
 
-        for line, line_idx in wrapped_lines {
-            // TODO(Apaar): Compute lines per page and don't render anything below.
-            if line_idx < scroll_row {
+        y_off := f32(0)
+
+        for line, line_idx in display.wrapped_lines {
+            // Skip the scrolled lines
+            if line_idx < display.scroll_row {
                 continue
             }
 
-            if line_idx >= scroll_row + lpp {
-                break
+            y_pos := display.bounds.y + y_off
+
+            if y_pos < display.bounds.y {
+                continue
             }
 
-            defer y_pos += font_size
+            if y_pos >= display.bounds.y + display.bounds.height {
+                break
+            }
 
             // No caret by default
             caret_pos := -1
 
-            if mode != .COMMAND && blink && line_idx == wrapped_loc.row {
-                caret_pos = wrapped_loc.col
+            if mode != .COMMAND && blink && line_idx == display.wrapped_loc.row {
+                caret_pos = display.wrapped_loc.col
             }
 
             draw_line(
                 ed, 
                 theme, 
                 line, 
-                {20.0, 20.0 + y_pos}, 
+                {display.bounds.x, y_pos}, 
                 caret_pos, 
                 fixed_caret_w=mode == .INSERT ? INSERT_CARET_W : 0, 
                 chop_caret=pending_action != .NONE,
             )
+
+            y_off += font_size
         }
     }
 

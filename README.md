@@ -15,6 +15,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for redo
 - [x] Add line wrapping
 - [x] Factor our modifier keys into bit_field
+- [x] Allow adjusting the bounds of the text display
 - [ ] Add margin to left and right side when rendering
 - [ ] Add support for saving and loading
 - [ ] Add support for repeat (`.`), very tricky

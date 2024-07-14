@@ -48,6 +48,20 @@ Editor_Undo_Item :: struct {
     dest: union #shared_nil {^[dynamic]byte, []byte},
 }
 
+Editor_Display_State :: struct {
+    bounds: rl.Rectangle,
+
+    scroll_row: int,
+
+    // The most lines we can fit onto a page
+    max_lines_on_page: int,
+
+    wrapped_loc: Editor_Loc,
+
+    // Allocated using temp_allocator
+    wrapped_lines: [dynamic]string,
+}
+
 Editor :: struct {
     mode: Editor_Mode,
 
@@ -69,14 +83,10 @@ Editor :: struct {
     undos: [dynamic]Editor_Undo_Item,
     redos: [dynamic]Editor_Undo_Item,
 
-    // This fields are used for drawing. They are only
+    // This field is used for drawing. They are only
     // guaranteed to be valid between editor_display_begin
     // and editor_display_end.
-    scroll_row: int,
-
-    // Allocated using temp_allocator
-    wrapped_lines: [dynamic]string,
-    wrapped_loc: Editor_Loc,
+    display: Editor_Display_State
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -215,7 +225,6 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
 track_text_and_pos :: proc(using ed: ^Editor) {
     editor_undo_track(ed, &sb.buf)
     editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
-    editor_undo_track(ed, mem.ptr_to_bytes(&scroll_row))
 }
 
 editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {

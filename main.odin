@@ -7,6 +7,8 @@ WINDOW_INIT_WIDTH :: 800
 WINDOW_INIT_HEIGHT :: 450
 TARGET_FPS :: 240
 SECONDS_TO_FRAMES :: TARGET_FPS
+PAGE_MARGIN_TOP :: 40
+PAGE_WIDTH_PCT :: 0.8
 
 main :: proc() {
     rl.SetConfigFlags({.WINDOW_RESIZABLE});
@@ -85,10 +87,16 @@ main :: proc() {
             }
         }
 
+        render_w := f32(rl.GetRenderWidth())
+        render_h := f32(rl.GetRenderHeight())
+
+        page_w := render_w * PAGE_WIDTH_PCT
+        margin_w := render_w * ((1 - PAGE_WIDTH_PCT) / 2)
+
         rl.BeginDrawing()
             rl.ClearBackground(theme.data.bg_color)
 
-            editor_display_begin(&ed, &theme, 100)
+            editor_display_begin(&ed, &theme, {20, 20, 100, render_h - editor_status_line_height(&theme)})
 
             editor_display_scroll_cursor_into_view(&ed, &theme)
             editor_display_draw(&ed, &theme)
