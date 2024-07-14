@@ -63,6 +63,13 @@ draw_line :: proc(
 }
 
 @(private="file")
+to_cstring :: proc(builder: ^strings.Builder) -> cstring {
+    strings.write_byte(builder, 0)
+    strings.pop_byte(builder)
+    return cstring(raw_data(builder.buf))
+}
+
+@(private="file")
 wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> ([dynamic]string, Editor_Loc) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
@@ -74,6 +81,35 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
     lines := make([dynamic]string, 0, len(orig_lines), context.temp_allocator)
 
     line_builder := strings.builder_make(context.temp_allocator)
+
+    // discarded_chars is for if you toss away any characters in between the line break position
+    // and the 'loc' (assuming the loc is after the 
+    append_broken_line :: proc(
+        lines: ^[dynamic]string, 
+        loc: ^Editor_Loc, 
+        broken_line: string, 
+        break_pos: int, 
+        discarded_chars: int
+    ) {
+        prev_line_count := len(lines^)
+
+        append(lines, strings.clone(broken_line, context.temp_allocator))
+
+        if loc.row > prev_line_count {
+            // In adding this line, we've pushed down the cursor
+            loc.row += 1
+        } else if loc.row == prev_line_count {
+            // If column is before where we broke, then leave it alone, but if it's after
+            // then subtract the length of the line we just pushed and push the row down by
+            // one.
+            //
+            // TODO(Apaar): Is this off by one?
+            if loc.col >= break_pos {
+                loc.row += 1
+                loc.col -= break_pos + discarded_chars
+            }
+        }
+    }
 
     for orig_line, orig_line_idx in orig_lines {
         if len(orig_line) == 0 {
@@ -102,28 +138,58 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
 
             line_size := rl.MeasureTextEx(
                 font, 
-                // TODO(Apaar): Do not allocate here, re-use a buffer
-                strings.clone_to_cstring(string(line_builder.buf[:]), context.temp_allocator),
+                to_cstring(&line_builder),
                 fontSize=font_size, 
-                spacing=0
+                spacing=0,
             )
 
             if line_size.x < wrap_w {
                 continue
             }
 
-            // This is the first token. It's already longer than the wrap_w, so don't bother breaking it.
-            //
-            // TODO(Apaar): Break the token in half or something and repeat
+            // This is the first token and its already longer than the max wrap width.
+            // Break it at the character level.
             if prev_len == 0 {
+                // FIXME(Apaar): What happens if a single character is larger than the max line w?
+
+                strings.builder_reset(&line_builder)
+
+                // Push bytes back until we reach a breaking point
+                for ch, idx in token_str {
+                    strings.write_rune(&line_builder, ch)
+
+                    line_size := rl.MeasureTextEx(
+                        font,
+                        to_cstring(&line_builder),
+                        fontSize=font_size,
+                        spacing=0,
+                    )
+
+                    if line_size.x < wrap_w {
+                        continue
+                    }
+
+                    strings.pop_rune(&line_builder)
+
+                    append_broken_line(
+                        &lines,
+                        &loc,
+                        string(line_builder.buf[:]),
+                        break_pos=len(line_builder.buf),
+                        discarded_chars=0,
+                    )
+
+                    strings.builder_reset(&line_builder)
+                    s = prev_s[idx:]
+                    break
+                }
+
                 continue
             }
 
             // TODO(Apaar): If orig_line_idx == orig_loc.row then
             // when we do this break, we need to check if we're before or
             // after the loc.col (not orig_loc). If we're before, we need to......
-
-            prev_line_count := len(lines)
 
             // Reset the line builder and tokenized string to before the token was added
             resize(&line_builder.buf, prev_len)
@@ -137,23 +203,13 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
                 s = prev_s
             }
 
-            // Push this line back
-            append(&lines, strings.clone(string(line_builder.buf[:]), context.temp_allocator))
-
-            if loc.row > prev_line_count {
-                // In adding this line, we've pushed down the cursor
-                loc.row += 1
-            } else if loc.row == prev_line_count {
-                // If column is before where we broke, then leave it alone, but if it's after
-                // then subtract the length of the line we just pushed and push the row down by
-                // one.
-                //
-                // TODO(Apaar): Is this off by one?
-                if loc.col >= len(line_builder.buf) {
-                    loc.row += 1
-                    loc.col -= len(line_builder.buf) + discarded_spaces
-                }
-            }
+            append_broken_line(
+                &lines, 
+                &loc,
+                string(line_builder.buf[:]),
+                break_pos=len(line_builder.buf),
+                discarded_chars=discarded_spaces,
+            )
 
             strings.builder_reset(&line_builder)
         }

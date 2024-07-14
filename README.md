@@ -17,7 +17,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Factor our modifier keys into bit_field
 - [x] Allow adjusting the bounds of the text display
 - [x] Add margin to left and right side when rendering
-- [ ] Break long individual tokens when wrapping
+- [x] Break long individual tokens when wrapping
 - [ ] Add support for saving and loading
 - [ ] Add vim end-of-line/start-of-line jk nav behavior
 - [ ] Add support for repeat (`.`), very tricky
