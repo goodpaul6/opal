@@ -88,6 +88,107 @@ editor_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme) {
     }
 }
 
+@(private="file")
+wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> ([dynamic]string, Editor_Loc) {
+    font := theme.fonts[.BODY]
+    font_size := f32(font.baseSize)
+
+    orig_loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
+    orig_lines := strings.split_lines(string(sb.buf[:]), context.temp_allocator)
+    
+    loc := orig_loc
+    lines := make([dynamic]string, 0, len(orig_lines), context.temp_allocator)
+
+    line_builder := strings.builder_make(context.temp_allocator)
+
+    for orig_line, orig_line_idx in orig_lines {
+        s := orig_line
+
+        // Append tokens to the line builder until it doesn't fit wrap_w
+        for len(s) > 0 {
+            prev_s := s
+            prev_len := len(line_builder.buf)
+
+            token := space_tokenizer_next_token(&s)
+            token_str := ""
+
+            switch v in token {
+                case Space_Tokenizer_Token_Word: token_str = string(v)
+                case Space_Tokenizer_Token_Spaces: token_str = string(v)
+                case: break
+            }
+
+            strings.write_string(&line_builder, token_str)
+
+            line_size := rl.MeasureTextEx(
+                font, 
+                // TODO(Apaar): Do not allocate here, re-use a buffer
+                strings.clone_to_cstring(string(line_builder.buf[:]), context.temp_allocator),
+                fontSize=font_size, 
+                spacing=0
+            )
+
+            if line_size.x < wrap_w {
+                continue
+            }
+
+            // This is the first token. It's already longer than the wrap_w, so don't bother breaking it.
+            //
+            // TODO(Apaar): Break the token in half or something and repeat
+            if prev_len == 0 {
+                continue
+            }
+
+            // TODO(Apaar): If orig_line_idx == orig_loc.row then
+            // when we do this break, we need to check if we're before or
+            // after the loc.col (not orig_loc). If we're before, we need to......
+
+            // Reset the line builder and tokenized string to before the token was added
+            s = prev_s
+            resize(&line_builder.buf, prev_len)
+
+            prev_line_count := len(lines)
+
+            // Push this line back
+            append(&lines, strings.clone(string(line_builder.buf[:]), context.temp_allocator))
+
+            if loc.row > prev_line_count {
+                // In adding this line, we've pushed down the cursor
+                loc.row += 1
+            } else if loc.row == prev_line_count {
+                // If column is before where we broke, then leave it alone, but if it's after
+                // then subtract the length of the line we just pushed and push the row down by
+                // one.
+                //
+                // FIXME(Apaar): Is this off by one?
+                if loc.col >= len(line_builder.buf) {
+                    loc.row += 1
+                    loc.col -= len(line_builder.buf)
+                }
+            }
+
+            strings.builder_reset(&line_builder)
+        }
+
+        if len(line_builder.buf) == 0 {
+            continue
+        }
+
+        // Push whatevers remaining in the buffer into the lines. The wrapping has already
+        // been accounted for in the loc changes above.
+        append(&lines, strings.clone(string(line_builder.buf[:]), context.temp_allocator))
+        strings.builder_reset(&line_builder)
+    }
+    
+    if len(lines) == 0 {
+        // Empty buffer, just append a space char to get the user started in terms
+        // of showing a caret
+        append(&lines, strings.clone(" ", context.temp_allocator))
+    }
+
+    return lines, loc
+}
+
 editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
@@ -102,9 +203,8 @@ editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
         y_pos: f32 = 0
 
         text := strings.to_string(sb)
-        lines := strings.split_lines(text, context.temp_allocator)
 
-        loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
+        lines, loc := wrapped_lines_and_loc(ed, theme, 100)
 
         for line, line_idx in lines {
             // TODO(Apaar): Compute lines per page and don't render anything below.

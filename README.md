@@ -17,6 +17,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [ ] Add margin to left and right side when rendering
 - [ ] Add support for saving and loading
 - [ ] Factor our modifier keys into their own struct
+- [ ] Add support for repeat (`.`), very tricky
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
