@@ -76,6 +76,12 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
     line_builder := strings.builder_make(context.temp_allocator)
 
     for orig_line, orig_line_idx in orig_lines {
+        if len(orig_line) == 0 {
+            // Special case, empty line, just shift
+            append(&lines, "")
+            continue
+        }
+
         s := orig_line
 
         // Append tokens to the line builder until it doesn't fit wrap_w
@@ -212,6 +218,14 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
     {
         // Draw text lines
+
+        rl.BeginScissorMode(
+            i32(display.bounds.x), 
+            i32(display.bounds.y),
+            i32(display.bounds.width),
+            i32(display.bounds.height),
+        )
+        defer rl.EndScissorMode()
 
         text := strings.to_string(sb)
 

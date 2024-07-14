@@ -16,8 +16,10 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add line wrapping
 - [x] Factor our modifier keys into bit_field
 - [x] Allow adjusting the bounds of the text display
-- [ ] Add margin to left and right side when rendering
+- [x] Add margin to left and right side when rendering
+- [ ] Break long individual tokens when wrapping
 - [ ] Add support for saving and loading
+- [ ] Add vim end-of-line/start-of-line jk nav behavior
 - [ ] Add support for repeat (`.`), very tricky
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
