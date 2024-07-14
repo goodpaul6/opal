@@ -13,7 +13,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Refactor undo code to be less clown
 - [x] Add support for scrolling
 - [x] Add support for redo
-- [ ] Add line wrapping
+- [x] Add line wrapping
 - [ ] Add margin to left and right side when rendering
 - [ ] Add support for saving and loading
 - [ ] Factor our modifier keys into their own struct

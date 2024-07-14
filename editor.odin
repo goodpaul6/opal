@@ -48,7 +48,6 @@ Editor :: struct {
     state: te.State,
 
     prev_frame_sel: [2]int,
-    scroll_row: int,
 
     pending_action: Editor_Action,
 
@@ -62,6 +61,15 @@ Editor :: struct {
 
     undos: [dynamic]Editor_Undo_Item,
     redos: [dynamic]Editor_Undo_Item,
+
+    // This fields are used for drawing. They are only
+    // guaranteed to be valid between editor_display_begin
+    // and editor_display_end.
+    scroll_row: int,
+
+    // Allocated using temp_allocator
+    wrapped_lines: [dynamic]string,
+    wrapped_loc: Editor_Loc,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {

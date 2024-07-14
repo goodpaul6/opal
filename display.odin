@@ -70,24 +70,6 @@ lines_per_page :: proc(font_size: f32) -> int {
     return int(rh / font_size)
 }
 
-editor_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme) {
-    font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
-
-    loc := byte_index_to_editor_loc(state.selection[0], sb.buf[:])
-
-    if loc.row < scroll_row {
-        scroll_row = loc.row
-        return
-    }
-
-    lpp := lines_per_page(font_size)
-
-    if loc.row >= scroll_row + lpp {
-        scroll_row = loc.row - lpp + 1
-    }
-}
-
 @(private="file")
 wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> ([dynamic]string, Editor_Loc) {
     font := theme.fonts[.BODY]
@@ -143,11 +125,19 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
             // when we do this break, we need to check if we're before or
             // after the loc.col (not orig_loc). If we're before, we need to......
 
+            prev_line_count := len(lines)
+
             // Reset the line builder and tokenized string to before the token was added
-            s = prev_s
             resize(&line_builder.buf, prev_len)
 
-            prev_line_count := len(lines)
+            discarded_spaces := 0
+
+            if _, is_space := token.(Space_Tokenizer_Token_Spaces); is_space {
+                // Discard the space token if it is the cause of a line break.
+                discarded_spaces = len(token_str)
+            } else {
+                s = prev_s
+            }
 
             // Push this line back
             append(&lines, strings.clone(string(line_builder.buf[:]), context.temp_allocator))
@@ -160,10 +150,10 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
                 // then subtract the length of the line we just pushed and push the row down by
                 // one.
                 //
-                // FIXME(Apaar): Is this off by one?
+                // TODO(Apaar): Is this off by one?
                 if loc.col >= len(line_builder.buf) {
                     loc.row += 1
-                    loc.col -= len(line_builder.buf)
+                    loc.col -= len(line_builder.buf) + discarded_spaces
                 }
             }
 
@@ -180,16 +170,40 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
         strings.builder_reset(&line_builder)
     }
     
-    if len(lines) == 0 {
-        // Empty buffer, just append a space char to get the user started in terms
-        // of showing a caret
-        append(&lines, strings.clone(" ", context.temp_allocator))
-    }
+    // Just append a space char to get the user started in terms
+    // of showing a caret
+    append(&lines, strings.clone(" ", context.temp_allocator))
 
     return lines, loc
 }
 
-editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
+// Sets up display state that will use used throughout display calls
+editor_display_begin :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) {
+    wrapped_lines, wrapped_loc = wrapped_lines_and_loc(ed, theme, wrap_w)
+}
+
+// Cleans up display state
+editor_display_end :: proc(using ed: ^Editor) {
+    // TODO(Apaar): Maybe clean up wrapped_lines?
+}
+
+editor_display_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme) {
+    font := theme.fonts[.BODY]
+    font_size := f32(font.baseSize)
+
+    if wrapped_loc.row < scroll_row {
+        scroll_row = wrapped_loc.row
+        return
+    }
+
+    lpp := lines_per_page(font_size)
+
+    if wrapped_loc.row >= scroll_row + lpp - 1 {
+        scroll_row = wrapped_loc.row - lpp + 1
+    }
+}
+
+editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
@@ -204,9 +218,7 @@ editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
         text := strings.to_string(sb)
 
-        lines, loc := wrapped_lines_and_loc(ed, theme, 100)
-
-        for line, line_idx in lines {
+        for line, line_idx in wrapped_lines {
             // TODO(Apaar): Compute lines per page and don't render anything below.
             if line_idx < scroll_row {
                 continue
@@ -221,8 +233,8 @@ editor_draw :: proc(using ed: ^Editor, theme: ^Theme) {
             // No caret by default
             caret_pos := -1
 
-            if mode != .COMMAND && blink && line_idx == loc.row {
-                caret_pos = loc.col
+            if mode != .COMMAND && blink && line_idx == wrapped_loc.row {
+                caret_pos = wrapped_loc.col
             }
 
             draw_line(

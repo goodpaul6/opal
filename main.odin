@@ -83,12 +83,15 @@ main :: proc() {
             }
         }
 
-        editor_scroll_cursor_into_view(&ed, &theme)
-
         rl.BeginDrawing()
             rl.ClearBackground(theme.data.bg_color)
 
-            editor_draw(&ed, &theme)
+            editor_display_begin(&ed, &theme, 100)
+
+            editor_display_scroll_cursor_into_view(&ed, &theme)
+            editor_display_draw(&ed, &theme)
+
+            editor_display_end(&ed)
         rl.EndDrawing()
 
         free_all(context.temp_allocator)
