@@ -21,7 +21,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add command parser
 - [ ] Add support for saving and loading
 - [ ] Add vim end-of-line/start-of-line jk nav behavior
-- [ ] Add support for repeat (`.`), very tricky
+- [ ] Add support for repeat (`.`), very tricky just record keyboard lol
 - [ ] Show workspace tree when doing `:E`
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
