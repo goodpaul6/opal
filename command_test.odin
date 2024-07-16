@@ -7,7 +7,12 @@ test_command_parser :: proc(t: ^testing.T) {
     cmd_src := "w hello.txt"
     cmd := command_parse(&cmd_src)
 
-    testing.expect_value(t, cmd, Command_Write{"hello.txt"})
+    testing.expect_value(t, cmd, Command_Write{"hello.txt", false})
+
+    cmd_src = "wq hello.txt"
+    cmd = command_parse(&cmd_src)
+
+    testing.expect_value(t, cmd, Command_Write{"hello.txt", true})
 
     cmd_src = "e hello.txt"
     cmd = command_parse(&cmd_src)

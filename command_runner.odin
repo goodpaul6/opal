@@ -59,6 +59,8 @@ command_run :: proc(cmd: ^Command, ed: ^Editor) -> bool {
 
             return true
         }
+
+        case Command_Quit: ed.exit_requested = true
     }
 
     return false

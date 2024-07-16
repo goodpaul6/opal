@@ -50,20 +50,6 @@ Editor_Undo_Item :: struct {
     dest: union #shared_nil {^[dynamic]byte, []byte},
 }
 
-Editor_Display_State :: struct {
-    bounds: rl.Rectangle,
-
-    scroll_row: int,
-
-    // The most lines we can fit onto a page
-    max_lines_on_page: int,
-
-    wrapped_loc: Editor_Loc,
-
-    // Allocated using temp_allocator
-    wrapped_lines: [dynamic]string,
-}
-
 Editor :: struct {
     mode: Editor_Mode,
 

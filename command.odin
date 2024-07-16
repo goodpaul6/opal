@@ -2,6 +2,8 @@ package main
 
 import "core:strings"
 
+Command_Quit :: struct {}
+
 Command_Write :: struct {
     // Could be empty
     filename: string,
@@ -13,6 +15,7 @@ Command_Edit :: struct {
 }
 
 Command :: union #no_nil {
+    Command_Quit,
     Command_Write,
     Command_Edit,
 }
@@ -82,6 +85,10 @@ command_parse :: proc(src: ^string, allocator := context.temp_allocator) -> (cmd
         filename := next_string(src) or_return
 
         return Command_Edit{strings.clone(filename, allocator)}, true
+    }
+
+    if s == "q" {
+        return Command_Quit{}, true
     }
 
     return

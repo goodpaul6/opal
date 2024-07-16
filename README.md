@@ -23,13 +23,15 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for `gg` and `G`
 - [x] Add support for `r`
 - [x] Add support for `{` and `}` movements
+- [ ] Modify `wrapped_lines` to be a display data structure instead
+- [ ] Correctly highlight markdown TODO lists
+- [ ] Switch to GLFW + NanoVG instead
 - [ ] Add ability to flash status for a period of time
 - [ ] Add tab completion to commands
 - [ ] Refactor undo commit calls to always happen unless a bool is set
 - [ ] Add vim end-of-line/start-of-line jk nav behavior
 - [ ] Add support for repeat (`.`), very tricky just record keyboard lol
 - [ ] Show workspace tree when doing `:E`
-- [ ] Correctly highlight markdown TODO lists
 - [ ] Add command for new day file
 - [ ] Add forward and backward search bindings
 * [ ] Add support for copy/paste of text

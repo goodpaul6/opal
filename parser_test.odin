@@ -23,7 +23,7 @@ test_parser :: proc(t: ^testing.T) {
     testing.expect_value(t, t2.sub, Parser_Token_Word("Hello"))
     testing.expect_value(t, t3.sub, Parser_Token_Spaces(" "))
     testing.expect_value(t, t4.sub, Parser_Token_Word("world"))
-    testing.expect_value(t, t5.sub, Parser_Token_Spaces("\n"))
+    testing.expect_value(t, t5.sub, Parser_Token_Newline("\n"))
     testing.expect_value(t, t6.sub, Parser_Token_Word("a"))
     testing.expect_value(t, t7.sub, Parser_Token_Pre("test\U0001F600"))
     testing.expect_value(t, ok, false)

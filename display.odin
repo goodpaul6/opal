@@ -5,6 +5,20 @@ import rl "vendor:raylib"
 
 INSERT_CARET_W :: 2
 
+Editor_Display_State :: struct {
+    bounds: rl.Rectangle,
+
+    scroll_row: int,
+
+    // The most lines we can fit onto a page
+    max_lines_on_page: int,
+
+    wrapped_loc: Editor_Loc,
+
+    // Allocated using temp_allocator
+    wrapped_lines: [dynamic]string,
+}
+
 @(private="file")
 draw_line :: proc(
     using ed: ^Editor, 
@@ -62,7 +76,6 @@ draw_line :: proc(
     )
 }
 
-@(private="file")
 to_cstring :: proc(builder: ^strings.Builder) -> cstring {
     strings.write_byte(builder, 0)
     strings.pop_byte(builder)
@@ -272,6 +285,12 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
     blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
 
+    commands := make([dynamic]Display_Command, context.temp_allocator)
+
+    display_command_gen(ed, theme, display.bounds, &commands)
+    display_command_run_all(commands[:])
+
+    /*
     {
         // Draw text lines
 
@@ -323,6 +342,7 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
             y_off += font_size
         }
     }
+    */
 
     {
         // Draw status bar
