@@ -21,7 +21,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add command parser
 - [x] Add support for saving and loading
 - [x] Add support for `gg` and `G`
-- [ ] Add support for `r`
+- [x] Add support for `r`
 - [ ] Add support for `{` and `}` movements
 - [ ] Add ability to flash status for a period of time
 - [ ] Add tab completion to commands
