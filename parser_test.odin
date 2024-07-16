@@ -19,6 +19,7 @@ test_parser :: proc(t: ^testing.T) {
     t8, ok := parser_next_token(&s, &pos)
 
     testing.expect_value(t, t1.sub, Parser_Token_Spaces("  "))
+    testing.expect_value(t, t1.extents, [2]int{0, 2})
     testing.expect_value(t, t2.sub, Parser_Token_Word("Hello"))
     testing.expect_value(t, t3.sub, Parser_Token_Spaces(" "))
     testing.expect_value(t, t4.sub, Parser_Token_Word("world"))
