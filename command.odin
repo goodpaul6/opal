@@ -5,6 +5,7 @@ import "core:strings"
 Command_Write :: struct {
     // Could be empty
     filename: string,
+    quit: bool,
 }
 
 Command_Edit :: struct {
@@ -68,10 +69,13 @@ next_string :: proc(src: ^string) -> (s: string, ok: bool) {
 command_parse :: proc(src: ^string, allocator := context.temp_allocator) -> (cmd: Command, ok: bool) #optional_ok {
     s := next_string(src) or_return
 
-    if s == "w" {
+    if s == "w" || s == "wq" {
         filename, ok := next_string(src) 
 
-        return Command_Write{strings.clone(filename, allocator)}, true
+        return Command_Write{
+            strings.clone(filename, allocator),
+            s == "wq",
+        }, true
     }
 
     if s == "e" {

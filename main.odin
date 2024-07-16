@@ -12,7 +12,7 @@ PAGE_MARGIN_BOTTOM :: 40
 PAGE_WIDTH_PCT :: 0.5
 
 main :: proc() {
-    rl.SetConfigFlags({.WINDOW_RESIZABLE});
+    rl.SetConfigFlags({.WINDOW_RESIZABLE})
 
     rl.InitWindow(
         title=WINDOW_TITLE, 
@@ -37,7 +37,7 @@ main :: proc() {
 
     kr := Key_Repeat_State{}
 
-    for !rl.WindowShouldClose() {
+    for !rl.WindowShouldClose() && !ed.exit_requested {
         key_repeat_begin_frame(&kr)
         defer key_repeat_end_frame(&kr)
 

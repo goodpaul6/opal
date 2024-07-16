@@ -19,7 +19,13 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add margin to left and right side when rendering
 - [x] Break long individual tokens when wrapping
 - [x] Add command parser
-- [ ] Add support for saving and loading
+- [x] Add support for saving and loading
+- [x] Add support for `gg` and `G`
+- [ ] Add support for `r`
+- [ ] Add support for `{` and `}` movements
+- [ ] Add ability to flash status for a period of time
+- [ ] Add tab completion to commands
+- [ ] Refactor undo commit calls to always happen unless a bool is set
 - [ ] Add vim end-of-line/start-of-line jk nav behavior
 - [ ] Add support for repeat (`.`), very tricky just record keyboard lol
 - [ ] Show workspace tree when doing `:E`

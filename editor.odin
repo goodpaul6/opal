@@ -17,6 +17,8 @@ Editor_Mode :: enum {
 Editor_Action :: enum {
     NONE,
     DELETE,
+    GO,
+    REPLACE,
 }
 
 Editor_Key_Mod :: enum {
@@ -78,6 +80,9 @@ Editor :: struct {
     // TODO(Apaar): Perhaps this should be managed via a text/edit state too?
     command: strings.Builder,
 
+    // The name of the file currently being edited
+    filename: strings.Builder,
+
     undo_trackers: [dynamic]Editor_Undo_Tracker,
 
     undos: [dynamic]Editor_Undo_Item,
@@ -86,7 +91,9 @@ Editor :: struct {
     // This field is used for drawing. They are only
     // guaranteed to be valid between editor_display_begin
     // and editor_display_end.
-    display: Editor_Display_State
+    display: Editor_Display_State,
+
+    exit_requested: bool,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -139,6 +146,16 @@ editor_init :: proc(using ed: ^Editor) {
     sb = strings.builder_make()
     status = strings.builder_make()
     command = strings.builder_make()
+    filename = strings.builder_make()
+}
+
+editor_clamp_cursor_to_buffer :: proc(using ed: ^Editor) {
+    state.selection[0] = clamp(state.selection[0], 0, len(sb.buf))
+    state.selection[1] = state.selection[0]
+}
+
+editor_get_text :: proc(using ed: ^Editor) -> string {
+    return strings.to_string(sb)
 }
 
 editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
@@ -146,10 +163,16 @@ editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
     strings.write_string(&status, str)
 }
 
+editor_set_filename :: proc(using ed: ^Editor, str: string) {
+    strings.builder_reset(&filename)
+    strings.write_string(&filename, str)
+}
+
 editor_destroy :: proc(using ed: ^Editor) {
     strings.builder_destroy(&sb)
     strings.builder_destroy(&status)
     strings.builder_destroy(&command)
+    strings.builder_destroy(&filename)
 
     te.destroy(&state)
 }
@@ -235,29 +258,73 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
 
     editor_update_state_indices(ed)
 
-    switch mode {
+    outer_switch: switch mode {
         case .NORMAL: {
-            if pending_action == .DELETE {
+            switch pending_action {
+                case .GO: {
+                    track_text_and_pos(ed)
+                    defer editor_undo_commit(ed)
+
+                    if key == .G {
+                        te.move_to(&state, .Start)
+                    }
+
+                    pending_action = .NONE
+                    break outer_switch
+                }
+
+                case .DELETE: {
+                    track_text_and_pos(ed)
+                    defer editor_undo_commit(ed)
+
+                    pending_action = .NONE
+
+                    if key == .D {
+                        // Delete the line
+                        te.move_to(&state, .Soft_Line_End)
+                        te.delete_to(&state, .Soft_Line_Start)
+                        te.delete_to(&state, .Left)
+                        break outer_switch
+                    }
+
+                    translation, valid := key_to_translation(key, .SHIFT in mods)
+
+                    if !valid {
+                        break outer_switch
+                    }
+
+                    te.delete_to(&state, translation)
+                    break outer_switch
+                }
+
+                case .REPLACE: {
+                    // Whatever key was pressed should've been handled as a charpress
+                    pending_action = .NONE
+                    break outer_switch
+                }
+
+                case .NONE:
+            }
+
+            if key == .R {
                 track_text_and_pos(ed)
-                defer editor_undo_commit(ed)
-
-                pending_action = .NONE
-
-                if key == .D {
-                    // Delete the line
-                    te.move_to(&state, .Soft_Line_End)
-                    te.delete_to(&state, .Soft_Line_Start)
-                    te.delete_to(&state, .Left)
-                    break
-                }
-
-                translation, valid := key_to_translation(key, .SHIFT in mods)
                 
-                if !valid {
-                    break
+                pending_action = .REPLACE
+
+                break
+            }
+
+            if key == .G {
+                if .SHIFT in mods {
+                    track_text_and_pos(ed)
+
+                    te.move_to(&state, .End)
+
+                    editor_undo_commit(ed)
+                } else {
+                    pending_action = .GO
                 }
 
-                te.delete_to(&state, translation)
                 break
             }
 
@@ -383,7 +450,15 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
             }
 
             if key == .ENTER {
-                // TODO(Apaar): Run command
+                src := strings.to_string(command)
+                cmd, ok := command_parse(&src)
+
+                if ok {
+                    command_run(&cmd, ed)
+                } else {
+                    // TODO(Apaar): Show status in bar (cleared after some time)
+                    fmt.println("Command failed")
+                }
 
                 strings.builder_reset(&command)
                 mode = .NORMAL
@@ -400,6 +475,18 @@ is_ascii :: proc(ch: rune) -> bool {
 editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
     switch mode {
         case .NORMAL: {
+            if pending_action == .REPLACE {
+                te.delete_to(&state, .Right)
+                te.input_rune(&state, ch)
+                te.move_to(&state, .Left)
+
+                editor_undo_commit(ed)
+
+                // FIXME(Apaar): Don't know why but I can't move the cursor back to orig pos
+                // otherwise the edit doesn't happen????
+
+                break
+            }
         }
 
         case .INSERT: {
