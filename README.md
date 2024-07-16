@@ -22,7 +22,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for saving and loading
 - [x] Add support for `gg` and `G`
 - [x] Add support for `r`
-- [ ] Add support for `{` and `}` movements
+- [x] Add support for `{` and `}` movements
 - [ ] Add ability to flash status for a period of time
 - [ ] Add tab completion to commands
 - [ ] Refactor undo commit calls to always happen unless a bool is set

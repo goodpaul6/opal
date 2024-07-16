@@ -221,6 +221,34 @@ editor_update_state_indices :: proc(using ed: ^Editor) {
 }
 
 @(private="file")
+next_empty_line_byte_index :: proc(using ed: ^Editor, delta: int) -> int {
+    sel_pos := state.selection[0]
+
+    loc := byte_index_to_editor_loc(sel_pos, sb.buf[:])
+    prev_pos := -1
+
+    for {
+        loc.row += delta
+
+        pos := editor_loc_to_byte_index({loc.row, 0}, sb.buf[:])
+
+        // No more places to go
+        if pos <= 0 || pos >= len(sb.buf) || pos == prev_pos {
+            return pos
+        }
+
+        // Skip runs of newlines
+        if prev_pos >= 0 && (sb.buf[prev_pos] == '\n' && sb.buf[pos] != '\n') {
+            return prev_pos
+        }
+
+        prev_pos = pos
+    }
+
+    return -1
+}
+
+@(private="file")
 key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: te.Translation, valid: bool) {
     // For most cases we don't want shift to be pressed
     valid = !is_shift_pressed
@@ -304,6 +332,14 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 }
 
                 case .NONE:
+            }
+
+            if key == .LEFT_BRACKET && .SHIFT in mods {
+                state.selection[0] = next_empty_line_byte_index(ed, -1)
+            }
+
+            if key == .RIGHT_BRACKET && .SHIFT in mods {
+                state.selection[0] = next_empty_line_byte_index(ed, 1)
             }
 
             if key == .R {
