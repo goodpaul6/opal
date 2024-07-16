@@ -4,7 +4,8 @@ import "core:testing"
 
 @(test)
 test_parser :: proc(t: ^testing.T) {
-    s := "  Hello world\na`test`"
+    // We handle UTF8 correctly :)
+    s := "  Hello world\na`test\U0001F600`"
 
     t1 := parser_next_token(&s)
     t2 := parser_next_token(&s)
@@ -21,6 +22,6 @@ test_parser :: proc(t: ^testing.T) {
     testing.expect_value(t, t4, Parser_Token_Word("world"))
     testing.expect_value(t, t5, Parser_Token_Spaces("\n"))
     testing.expect_value(t, t6, Parser_Token_Word("a"))
-    testing.expect_value(t, t7, Parser_Token_Pre("test"))
+    testing.expect_value(t, t7, Parser_Token_Pre("test\U0001F600"))
     testing.expect_value(t, ok, false)
 }
