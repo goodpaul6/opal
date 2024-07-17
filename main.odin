@@ -5,8 +5,6 @@ import rl "vendor:raylib"
 WINDOW_TITLE :: "Opal"
 WINDOW_INIT_WIDTH :: 800
 WINDOW_INIT_HEIGHT :: 450
-TARGET_FPS :: 240
-SECONDS_TO_FRAMES :: TARGET_FPS
 PAGE_MARGIN_TOP :: 40
 PAGE_MARGIN_BOTTOM :: 40
 PAGE_WIDTH_PCT :: 0.5
@@ -22,7 +20,6 @@ main :: proc() {
     defer rl.CloseWindow()
 
     rl.SetExitKey(.KEY_NULL)
-    rl.SetTargetFPS(TARGET_FPS)
 
     default_theme_data := theme_data_make_default()
     defer theme_data_destroy(&default_theme_data)
@@ -38,7 +35,7 @@ main :: proc() {
     kr := Key_Repeat_State{}
 
     for !rl.WindowShouldClose() && !ed.exit_requested {
-        key_repeat_begin_frame(&kr)
+        key_repeat_begin_frame(&kr, 400)
         defer key_repeat_end_frame(&kr)
 
         editor_begin_frame(&ed)
@@ -83,7 +80,7 @@ main :: proc() {
         }
 
         for key in rl.KeyboardKey {
-            if key_repeat_should_repeat(&kr, key, 0.4 * SECONDS_TO_FRAMES, 5) {
+            if key_repeat_should_repeat(&kr, key, 20) {
                 editor_handle_keypress(&ed, key, key_mods)
             }
         }
