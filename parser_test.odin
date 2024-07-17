@@ -16,7 +16,9 @@ test_parser :: proc(t: ^testing.T) {
     t5 := parser_next_token(&s, &pos)
     t6 := parser_next_token(&s, &pos)
     t7 := parser_next_token(&s, &pos)
-    t8, ok := parser_next_token(&s, &pos)
+    t8 := parser_next_token(&s, &pos)
+    t9 := parser_next_token(&s, &pos)
+    _, ok := parser_next_token(&s, &pos)
 
     testing.expect_value(t, t1.sub, Parser_Token_Spaces("  "))
     testing.expect_value(t, t1.extents, [2]int{0, 2})
@@ -25,6 +27,8 @@ test_parser :: proc(t: ^testing.T) {
     testing.expect_value(t, t4.sub, Parser_Token_Word("world"))
     testing.expect_value(t, t5.sub, Parser_Token_Newline("\n"))
     testing.expect_value(t, t6.sub, Parser_Token_Word("a"))
-    testing.expect_value(t, t7.sub, Parser_Token_Pre("test\U0001F600"))
+    testing.expect_value(t, t7.sub, Parser_Token_Backtick("`"))
+    testing.expect_value(t, t8.sub, Parser_Token_Word("test\U0001F600"))
+    testing.expect_value(t, t9.sub, Parser_Token_Backtick("`"))
     testing.expect_value(t, ok, false)
 }

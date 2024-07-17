@@ -48,31 +48,37 @@ display_command_gen :: proc(
 
     caret_rect: rl.Rectangle
 
+    in_pre := false
+
     for token in parser_next_token(&src, &src_pos) {
-        contains_caret := token.extents[0] <= sel_pos && sel_pos < token.extents[1]
+        contains_caret := token.extents[0] <= sel_pos && sel_pos <= token.extents[1]
         
         caret_idx := contains_caret ? sel_pos - token.extents[0] : -1
 
-        font: ^rl.Font
-
         is_newline := false
         is_spaces := false
+        is_backtick := false
 
         switch sub in token.sub {
-            case Parser_Token_Newline: {
-                font = &theme.fonts[.BODY]
-                is_newline = true
-            }
-
-            case Parser_Token_Spaces: {
-                font = &theme.fonts[.BODY]
-                is_spaces = true
-            }
-
-            case Parser_Token_Word: font = &theme.fonts[.BODY]
-            case Parser_Token_Pre: font = &theme.fonts[.PRE]
+            case Parser_Token_Newline: is_newline = true
+            case Parser_Token_Spaces: is_spaces = true
+            case Parser_Token_Backtick: is_backtick = true
+            case Parser_Token_Word:
+            case:
         }
 
+        entered_pre := false
+
+        if is_backtick && !in_pre {
+            in_pre = true
+            entered_pre = true
+        }
+
+        defer if is_backtick && in_pre && !entered_pre {
+            in_pre = false
+        }
+
+        font: ^rl.Font = in_pre ? &theme.fonts[.PRE] : &theme.fonts[.BODY]
         font_size := f32(font.baseSize)
 
         if is_newline {
