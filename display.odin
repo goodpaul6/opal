@@ -244,6 +244,7 @@ editor_display_begin :: proc(
 ) {
     display.bounds = bounds
 
+    /*
     if should_scroll_cursor_into_view {
         top := display.prev_caret_rect.y
         bottom := display.prev_caret_rect.y + display.prev_caret_rect.height
@@ -258,6 +259,7 @@ editor_display_begin :: proc(
             should_scroll_cursor_into_view = false
         }
     }
+    */
 }
 
 // Cleans up display state
@@ -273,12 +275,21 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
     font := theme.fonts[.BODY]
     font_size := f32(font.baseSize)
 
-    blink := (cast (int) (rl.GetTime() * 1000 / 300)) % 2 == 0
+    blink := int(rl.GetTime() * 1000 / 300) % 2 == 0
 
     commands := make([dynamic]Display_Command, context.temp_allocator)
 
-    _, display.prev_caret_rect = display_command_gen(ed, theme, display.bounds, display.scroll_pos, &commands)
-    display_command_run_all(commands[:])
+    _, display.prev_caret_rect = display_command_gen(
+        ed, 
+        theme, 
+        {display.bounds.width, display.bounds.height}, 
+        &commands,
+    )
+    display_command_run_all(
+        commands[:], 
+        {display.bounds.x, display.bounds.y}, 
+        display.scroll_pos,
+    )
 
     /*
     {

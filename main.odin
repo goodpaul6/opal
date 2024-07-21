@@ -104,8 +104,6 @@ main :: proc() {
             editor_display_draw(&ed, &theme)
 
             editor_display_end(&ed)
-
-            rl.DrawRectangleRec(ed.display.prev_caret_rect, rl.RED)
         rl.EndDrawing()
 
         free_all(context.temp_allocator)

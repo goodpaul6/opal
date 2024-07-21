@@ -28,8 +28,7 @@ Display_Command :: struct {
 display_command_gen :: proc(
     ed: ^Editor, 
     theme: ^Theme,
-    bounds: rl.Rectangle,
-    scroll_pos: [2]f32,
+    bounds_size: [2]f32,
     commands: ^[dynamic]Display_Command,
 ) -> (ok: bool, caret_rect: rl.Rectangle) {
     start_cmd_count := len(commands^)
@@ -42,7 +41,7 @@ display_command_gen :: proc(
     sel_loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
 
     // TODO(Apaar): Handle horizontal scroll
-    draw_pos := [2]f32{bounds.x, bounds.y - scroll_pos.y}
+    draw_pos := [?]f32{0, 0}
 
     cur_line_text_w: f32
     cur_line_max_text_h: f32
@@ -89,7 +88,7 @@ display_command_gen :: proc(
             }
 
             // Nothing else to draw, just reset
-            draw_pos.x = bounds.x
+            draw_pos.x = 0
             draw_pos.y += max(cur_line_max_text_h, font_size)
 
             cur_line_text_w = 0
@@ -107,7 +106,7 @@ display_command_gen :: proc(
             spacing=0,
         )
 
-        if cur_line_text_w + token_size.x > bounds.width {
+        if cur_line_text_w + token_size.x > bounds_size.x {
             // TODO(Apaar): Split individual tokens longer than wrap_w. Right now we just draw.
             if cur_line_text_w == 0 {
                 append(commands, Display_Command{
@@ -119,7 +118,7 @@ display_command_gen :: proc(
                     },
                 })
 
-                draw_pos.x = bounds.x
+                draw_pos.x = 0
                 draw_pos.y += max(cur_line_max_text_h, font_size)
 
                 cur_line_text_w = 0
@@ -129,7 +128,7 @@ display_command_gen :: proc(
             }
 
             // Reset back to the left
-            draw_pos.x = bounds.x
+            draw_pos.x = 0
 
             // In case this is the first token, it will hit the font_size case
             draw_pos.y += max(cur_line_max_text_h, font_size)
@@ -194,14 +193,20 @@ display_command_gen :: proc(
     return true, caret_rect
 }
 
-display_command_run_all :: proc(commands: []Display_Command) {
+display_command_run_all :: proc(
+    commands: []Display_Command, 
+    top_left: [2]f32, 
+    scroll_pos: [2]f32,
+) {
     for &cmd in commands {
+        pos := cmd.pos + top_left - scroll_pos
+
         switch sub in cmd.sub {
             case Display_Command_Text: {
                 rl.DrawTextEx(
                     sub.font^,
                     strings.clone_to_cstring(sub.text, context.temp_allocator),
-                    cmd.pos,
+                    position=pos,
                     fontSize=f32(sub.font.baseSize),
                     spacing=0,
                     tint=sub.color,
@@ -211,8 +216,8 @@ display_command_run_all :: proc(commands: []Display_Command) {
             case Display_Command_Rect: {
                 rl.DrawRectangleRec(
                     rl.Rectangle{
-                        cmd.pos.x,
-                        cmd.pos.y,
+                        pos.x,
+                        pos.y,
                         sub.w,
                         sub.h,
                     },
