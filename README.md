@@ -24,6 +24,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for `r`
 - [x] Add support for `{` and `}` movements
 - [x] Modify `wrapped_lines` to be a display data structure instead
+- [x] Scroll cursor into view
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Switch to GLFW + NanoVG instead
 - [ ] Add ability to flash status for a period of time
