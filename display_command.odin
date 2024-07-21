@@ -23,12 +23,15 @@ Display_Command :: struct {
     }
 }
 
+// HACK(Apaar): I return the caret rectangle from this for smoothly scrolling
+// the cursor into the bounds
 display_command_gen :: proc(
     ed: ^Editor, 
     theme: ^Theme,
     bounds: rl.Rectangle,
+    scroll_pos: [2]f32,
     commands: ^[dynamic]Display_Command,
-) -> bool {
+) -> (ok: bool, caret_rect: rl.Rectangle) {
     start_cmd_count := len(commands^)
 
     src := string(ed.sb.buf[:])
@@ -38,15 +41,14 @@ display_command_gen :: proc(
     sel_pos := ed.state.selection[0]
     sel_loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
 
-    draw_pos := [2]f32{bounds.x, bounds.y}
+    // TODO(Apaar): Handle horizontal scroll
+    draw_pos := [2]f32{bounds.x, bounds.y - scroll_pos.y}
 
     cur_line_text_w: f32
     cur_line_max_text_h: f32
 
     prev_src: string
     prev_src_pos: int
-
-    caret_rect: rl.Rectangle
 
     in_pre := false
 
@@ -189,7 +191,7 @@ display_command_gen :: proc(
         },
     })
 
-    return true
+    return true, caret_rect
 }
 
 display_command_run_all :: proc(commands: []Display_Command) {

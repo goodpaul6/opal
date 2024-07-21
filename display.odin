@@ -7,16 +7,8 @@ INSERT_CARET_W :: 2
 
 Editor_Display_State :: struct {
     bounds: rl.Rectangle,
-
-    scroll_row: int,
-
-    // The most lines we can fit onto a page
-    max_lines_on_page: int,
-
-    wrapped_loc: Editor_Loc,
-
-    // Allocated using temp_allocator
-    wrapped_lines: [dynamic]string,
+    scroll_pos: [2]f32,
+    prev_caret_rect: rl.Rectangle,
 }
 
 @(private="file")
@@ -248,31 +240,29 @@ wrapped_lines_and_loc :: proc(using ed: ^Editor, theme: ^Theme, wrap_w: f32) -> 
 editor_display_begin :: proc(
     using ed: ^Editor, 
     theme: ^Theme, 
-    bounds: rl.Rectangle
+    bounds: rl.Rectangle,
 ) {
     display.bounds = bounds
-    display.wrapped_lines, display.wrapped_loc = wrapped_lines_and_loc(ed, theme, bounds.width)
+
+    if should_scroll_cursor_into_view {
+        top := display.prev_caret_rect.y
+        bottom := display.prev_caret_rect.y + display.prev_caret_rect.height
+
+        // TODO(Apaar): Handle horiz scroll
+        if top < bounds.y {
+            display.scroll_pos.y = top
+        } else if bottom > bounds.y + bounds.height {
+            display.scroll_pos.y = top - display.prev_caret_rect.height - bounds.height
+        } else {
+            // In bounds, don't need to scroll anymore
+            should_scroll_cursor_into_view = false
+        }
+    }
 }
 
 // Cleans up display state
 editor_display_end :: proc(using ed: ^Editor) {
     // TODO(Apaar): Maybe clean up wrapped_lines?
-}
-
-editor_display_scroll_cursor_into_view :: proc(using ed: ^Editor, theme: ^Theme) {
-    font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
-
-    if display.wrapped_loc.row < display.scroll_row {
-        display.scroll_row = display.wrapped_loc.row
-        return
-    }
-
-    page_line_count := int(display.bounds.height / font_size)
-
-    if display.wrapped_loc.row >= display.scroll_row + page_line_count {
-        display.scroll_row = display.wrapped_loc.row - page_line_count + 1
-    }
 }
 
 editor_status_line_height :: proc(theme: ^Theme) -> f32{
@@ -287,7 +277,7 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
     commands := make([dynamic]Display_Command, context.temp_allocator)
 
-    display_command_gen(ed, theme, display.bounds, &commands)
+    _, display.prev_caret_rect = display_command_gen(ed, theme, display.bounds, display.scroll_pos, &commands)
     display_command_run_all(commands[:])
 
     /*

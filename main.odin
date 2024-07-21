@@ -101,10 +101,11 @@ main :: proc() {
                 render_h - editor_status_line_height(&theme) - PAGE_MARGIN_BOTTOM,
             })
 
-            editor_display_scroll_cursor_into_view(&ed, &theme)
             editor_display_draw(&ed, &theme)
 
             editor_display_end(&ed)
+
+            rl.DrawRectangleRec(ed.display.prev_caret_rect, rl.RED)
         rl.EndDrawing()
 
         free_all(context.temp_allocator)

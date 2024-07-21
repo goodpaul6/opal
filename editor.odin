@@ -74,6 +74,10 @@ Editor :: struct {
     undos: [dynamic]Editor_Undo_Item,
     redos: [dynamic]Editor_Undo_Item,
 
+    // When the user moves the cursor, this gets set to true.
+    // It remains true until the cursor comes into view.
+    should_scroll_cursor_into_view: bool,
+
     // This field is used for drawing. They are only
     // guaranteed to be valid between editor_display_begin
     // and editor_display_end.
@@ -184,6 +188,10 @@ editor_begin_frame :: proc(using ed: ^Editor) {
 }
 
 editor_end_frame :: proc(using ed: ^Editor) {
+    if prev_frame_sel != state.selection {
+        should_scroll_cursor_into_view = true
+    }
+
     prev_frame_sel = state.selection
     te.end(&state)
 }

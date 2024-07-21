@@ -23,7 +23,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for `gg` and `G`
 - [x] Add support for `r`
 - [x] Add support for `{` and `}` movements
-- [ ] Modify `wrapped_lines` to be a display data structure instead
+- [x] Modify `wrapped_lines` to be a display data structure instead
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Switch to GLFW + NanoVG instead
 - [ ] Add ability to flash status for a period of time
