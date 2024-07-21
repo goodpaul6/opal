@@ -8,12 +8,14 @@ Parser_Token_Newline :: distinct string
 Parser_Token_Spaces :: distinct string
 Parser_Token_Word :: distinct string
 Parser_Token_Backtick :: distinct string
+Parser_Token_Minus :: distinct string
 
 Parser_Token_Sub :: union #no_nil {
     Parser_Token_Newline,
     Parser_Token_Spaces,
     Parser_Token_Word,
     Parser_Token_Backtick,
+    Parser_Token_Minus,
 }
 
 Parser_Token :: struct {
@@ -48,6 +50,7 @@ parser_token_string :: proc(token: Parser_Token) -> string {
         case Parser_Token_Spaces: return string(sub)
         case Parser_Token_Word: return string(sub)
         case Parser_Token_Backtick: return string(sub)
+        case Parser_Token_Minus: return string(sub)
     }
 
     assert(false)
@@ -55,7 +58,7 @@ parser_token_string :: proc(token: Parser_Token) -> string {
 }
 
 parser_next_token :: proc(src: ^string, pos: ^int) -> (token: Parser_Token, ok: bool) #optional_ok {
-    state: enum {NONE, NEWLINE, SPACE, BACKTICK, WORD}
+    state: enum {NONE, NEWLINE, SPACE, BACKTICK, MINUS, WORD}
 
     start := pos^
     count := 0
@@ -78,6 +81,10 @@ parser_next_token :: proc(src: ^string, pos: ^int) -> (token: Parser_Token, ok: 
                     state = .NEWLINE
 
                     break loop
+                } else if ch == '-' {
+                    state = .MINUS
+
+                    break loop
                 } else do state = .WORD
 
                 continue loop
@@ -85,6 +92,7 @@ parser_next_token :: proc(src: ^string, pos: ^int) -> (token: Parser_Token, ok: 
 
             case .NEWLINE:
             case .BACKTICK:
+            case .MINUS:
 
             case .SPACE: {
                 if parser_is_non_newline_space(ch) do count += size
@@ -115,6 +123,7 @@ parser_next_token :: proc(src: ^string, pos: ^int) -> (token: Parser_Token, ok: 
         case .SPACE: sub = Parser_Token_Spaces(src[:count])
         case .BACKTICK: sub = Parser_Token_Backtick(src[:count])
         case .WORD: sub = Parser_Token_Word(src[:count])
+        case .MINUS: sub = Parser_Token_Minus(src[:count])
         case .NONE: return
     }
 

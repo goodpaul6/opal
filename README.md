@@ -43,5 +43,6 @@ A native alternative to Obsidian. Only has the features I care about.
 
 ## BUGS
 
-- [ ] Little bug in Odin compiler where it lists `-build-mode:lib` twice in help
+- [ ] When there's a linewrap and a pre right after the wrap, it seems to swap modes
+- [ ] Little bug in Odin compiler where it list  `-build-mode:lib` twice in help
 - [ ] I can transmute a `^[2]int` to `^[]byte` but I think that's incorrect since `^[2]int` doesn't have the same memory layout as a slice

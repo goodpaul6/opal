@@ -6,7 +6,7 @@ import "core:fmt"
 @(test)
 test_parser :: proc(t: ^testing.T) {
     // We handle UTF8 correctly :)
-    s := "  Hello world\na`test\U0001F600`"
+    s := "  Hello world\na`test\U0001F600`-"
     pos := 0
 
     t1 := parser_next_token(&s, &pos)
@@ -18,6 +18,7 @@ test_parser :: proc(t: ^testing.T) {
     t7 := parser_next_token(&s, &pos)
     t8 := parser_next_token(&s, &pos)
     t9 := parser_next_token(&s, &pos)
+    t10 := parser_next_token(&s, &pos)
     _, ok := parser_next_token(&s, &pos)
 
     testing.expect_value(t, t1.sub, Parser_Token_Spaces("  "))
@@ -30,5 +31,6 @@ test_parser :: proc(t: ^testing.T) {
     testing.expect_value(t, t7.sub, Parser_Token_Backtick("`"))
     testing.expect_value(t, t8.sub, Parser_Token_Word("test\U0001F600"))
     testing.expect_value(t, t9.sub, Parser_Token_Backtick("`"))
+    testing.expect_value(t, t10.sub, Parser_Token_Minus("-"))
     testing.expect_value(t, ok, false)
 }

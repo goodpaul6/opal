@@ -64,19 +64,18 @@ display_command_gen :: proc(
             case Parser_Token_Newline: is_newline = true
             case Parser_Token_Spaces: is_spaces = true
             case Parser_Token_Backtick: is_backtick = true
+            case Parser_Token_Minus:
             case Parser_Token_Word:
             case:
         }
 
-        entered_pre := false
+        defer if is_backtick && in_pre {
+            in_pre = false
+        }
 
         if is_backtick && !in_pre {
             in_pre = true
-            entered_pre = true
-        }
-
-        defer if is_backtick && in_pre && !entered_pre {
-            in_pre = false
+            is_backtick = false
         }
 
         font: ^rl.Font = in_pre ? &theme.fonts[.PRE] : &theme.fonts[.BODY]
