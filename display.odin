@@ -243,23 +243,6 @@ editor_display_begin :: proc(
     bounds: rl.Rectangle,
 ) {
     display.bounds = bounds
-
-    /*
-    if should_scroll_cursor_into_view {
-        top := display.prev_caret_rect.y
-        bottom := display.prev_caret_rect.y + display.prev_caret_rect.height
-
-        // TODO(Apaar): Handle horiz scroll
-        if top < bounds.y {
-            display.scroll_pos.y = top
-        } else if bottom > bounds.y + bounds.height {
-            display.scroll_pos.y = top - display.prev_caret_rect.height - bounds.height
-        } else {
-            // In bounds, don't need to scroll anymore
-            should_scroll_cursor_into_view = false
-        }
-    }
-    */
 }
 
 // Cleans up display state
@@ -279,22 +262,29 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
     commands := make([dynamic]Display_Command, context.temp_allocator)
 
-    _, display.prev_caret_rect = display_command_gen(
+    _, caret_rect := display_command_gen(
         ed, 
         theme, 
         {display.bounds.width, display.bounds.height}, 
         &commands,
     )
-    display_command_run_all(
-        commands[:], 
-        {display.bounds.x, display.bounds.y}, 
-        display.scroll_pos,
-    )
 
-    /*
+    if should_scroll_cursor_into_view {
+        top := caret_rect.y
+        bottom := caret_rect.y + caret_rect.height
+
+        // TODO(Apaar): Handle horiz scroll
+        if (top - display.scroll_pos.y) < 0 {
+            display.scroll_pos.y = top
+        } else if (bottom - display.scroll_pos.y) > display.bounds.height {
+            display.scroll_pos.y = bottom - display.bounds.height
+        } else {
+            // In bounds, don't need to scroll anymore
+            should_scroll_cursor_into_view = false
+        }
+    }
+
     {
-        // Draw text lines
-
         rl.BeginScissorMode(
             i32(display.bounds.x), 
             i32(display.bounds.y),
@@ -302,6 +292,17 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
             i32(display.bounds.height),
         )
         defer rl.EndScissorMode()
+
+        display_command_run_all(
+            commands[:], 
+            {display.bounds.x, display.bounds.y}, 
+            display.scroll_pos,
+        )
+    }
+
+    /*
+    {
+        // Draw text lines
 
         text := strings.to_string(sb)
 
