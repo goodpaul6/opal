@@ -62,16 +62,16 @@ display_command_gen :: proc(
             case Node_Newline:
                 line_height := max(cur_line_max_text_h, min_line_height)
 
-                if contains_caret {
-                    caret_rect = {draw_pos.x, draw_pos.y, 2, line_height}
-                }
-
                 // Nothing else to draw, just reset
                 draw_pos.x = 0
                 draw_pos.y += line_height
 
                 cur_line_text_w = 0
                 cur_line_max_text_h = 0
+
+                if contains_caret {
+                    caret_rect = {draw_pos.x, draw_pos.y, 2, line_height}
+                }
 
                 continue loop
             
