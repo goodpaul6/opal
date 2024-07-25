@@ -1,133 +1,65 @@
 package main
 
-import "core:strings"
-import "core:io"
-import "core:fmt"
-
-Parser_Token_Newline :: distinct string
-Parser_Token_Spaces :: distinct string
-Parser_Token_Word :: distinct string
-Parser_Token_Backtick :: distinct string
-Parser_Token_Minus :: distinct string
-
-Parser_Token_Sub :: union #no_nil {
-    Parser_Token_Newline,
-    Parser_Token_Spaces,
-    Parser_Token_Word,
-    Parser_Token_Backtick,
-    Parser_Token_Minus,
+Parser :: struct {
+    lex: Lexer,
 }
 
-Parser_Token :: struct {
-    // For figuring out where the cursor is, for example
-    extents: [2]int,
-    sub: Parser_Token_Sub,
-}
+parser_parse_regular_line :: proc(using p: ^Parser) -> List(Node) {
+    list := List(Node){}
 
-@(private="file")
-read_rune_iterator :: proc(reader: ^strings.Reader) -> (rr: rune, size: int, ok: bool) {
-    err: io.Error
+    in_pre := false
 
-    rr, size, err = strings.reader_read_rune(reader)
-    if err != nil {
-        return
-    }
+    for {
+        token, ok := lexer_next_token(&lex)
 
-    return rr, size, true
-}
-
-parser_is_non_newline_space :: proc(ch: rune) -> bool {
-    return strings.is_ascii_space(ch) && ch != '\n'
-}
-
-parser_is_word_delimiter :: proc(ch: rune) -> bool {
-    return ch == '`' || strings.is_ascii_space(ch)
-}
-
-parser_token_string :: proc(token: Parser_Token) -> string {
-    switch sub in token.sub {
-        case Parser_Token_Newline: return string(sub)
-        case Parser_Token_Spaces: return string(sub)
-        case Parser_Token_Word: return string(sub)
-        case Parser_Token_Backtick: return string(sub)
-        case Parser_Token_Minus: return string(sub)
-    }
-
-    assert(false)
-    return ""
-}
-
-parser_next_token :: proc(src: ^string, pos: ^int) -> (token: Parser_Token, ok: bool) #optional_ok {
-    state: enum {NONE, NEWLINE, SPACE, BACKTICK, MINUS, WORD}
-
-    start := pos^
-    count := 0
-
-    reader: strings.Reader
-    strings.reader_init(&reader, src^)
-
-    loop: for ch, size in read_rune_iterator(&reader) {
-        switch state {
-            case .NONE: {
-                count += size
-
-                if parser_is_non_newline_space(ch) do state = .SPACE
-                else if ch == '`' {
-                    state = .BACKTICK
-
-                    // Backticks are single char tokens
-                    break loop
-                } else if ch == '\n' {
-                    state = .NEWLINE
-
-                    break loop
-                } else if ch == '-' {
-                    state = .MINUS
-
-                    break loop
-                } else do state = .WORD
-
-                continue loop
-            }
-
-            case .NEWLINE:
-            case .BACKTICK:
-            case .MINUS:
-
-            case .SPACE: {
-                if parser_is_non_newline_space(ch) do count += size
-                else do break loop
-
-                continue loop
-            }
-
-            case .WORD: {
-                if parser_is_word_delimiter(ch) {
-                    break loop
-                }
-
-                count += size
-                continue loop
-            }
+        if !ok {
+            return list
         }
+
+        is_newline := false
+        is_backtick := false
+        all_spaces := false
+
+        #partial switch sub in token.sub {
+            case Lexer_Token_Newline: is_newline = true
+            case Lexer_Token_Backtick: is_backtick = true
+            case Lexer_Token_Spaces: all_spaces = true
+        }
+
+        sub: Node_Sub = Node_Text{
+            pre = (is_backtick && !in_pre) || in_pre,
+            all_spaces = all_spaces,
+            text = lexer_token_string(token),
+        } if !is_newline else Node_Newline{}
+
+        if is_backtick do in_pre = !in_pre
+
+        // TODO(Apaar): Once we have more node types, the extents
+        // calculation is gonna be a lil more complex
+        node := new(Node, context.temp_allocator)
+        node.extents = token.extents
+        node.sub = sub
+
+        list_push_back(&list, node)
     }
 
-    extents := [2]int{start, start + count}
+    return list
+}
 
-    pos^ += count
+parser_parse_string :: proc(src: string) -> List(Node) {
+    using p := Parser{lex = {src, 0}}
 
-    sub: Parser_Token_Sub
+    list := List(Node){}
 
-    switch state {
-        case .NEWLINE: sub = Parser_Token_Newline(src[:count])
-        case .SPACE: sub = Parser_Token_Spaces(src[:count])
-        case .BACKTICK: sub = Parser_Token_Backtick(src[:count])
-        case .WORD: sub = Parser_Token_Word(src[:count])
-        case .MINUS: sub = Parser_Token_Minus(src[:count])
-        case .NONE: return
+    for {
+        line_nodes := parser_parse_regular_line(&p)
+
+        if list_is_empty(line_nodes) {
+            break
+        }
+
+        list_append(&list, line_nodes)
     }
-
-    src ^= src[count:]
-
-    return {extents, sub}, true
+    
+    return list
 }

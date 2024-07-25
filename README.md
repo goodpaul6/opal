@@ -8,7 +8,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add status bar and display current mode
 - [x] Add the ability to zoom in and out (with crisp fonts)
 - [x] Add command input
-* [x] Add `dw` action + motion from Vim
+- [x] Add `dw` action + motion from Vim
 - [x] Add support for undo
 - [x] Refactor undo code to be less clown
 - [x] Add support for scrolling
@@ -25,8 +25,9 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for `{` and `}` movements
 - [x] Modify `wrapped_lines` to be a display data structure instead
 - [x] Scroll cursor into view
-- [ ] Correctly highlight markdown TODO lists
 - [ ] Switch to GLFW + NanoVG instead
+- [ ] Parse text into useful nodes before display gen
+- [ ] Correctly highlight markdown TODO lists
 - [ ] Add ability to flash status for a period of time
 - [ ] Add tab completion to commands
 - [ ] Refactor undo commit calls to always happen unless a bool is set
@@ -35,8 +36,8 @@ A native alternative to Obsidian. Only has the features I care about.
 - [ ] Show workspace tree when doing `:E`
 - [ ] Add command for new day file
 - [ ] Add forward and backward search bindings
-* [ ] Add support for copy/paste of text
-* [ ] Add support for copy/paste of images
+- [ ] Add support for copy/paste of text
+- [ ] Add support for copy/paste of images
 - [ ] Add command to push the current document to `opalnotebook.com`
 - [ ] Detect conflicts document push similar to how Git's `--force-with-lease` works
 - [ ] Create server for live collaborative editing (maybe using GGPO lol)?

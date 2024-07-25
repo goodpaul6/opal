@@ -31,11 +31,6 @@ display_command_gen :: proc(
     bounds_size: [2]f32,
     commands: ^[dynamic]Display_Command,
 ) -> (ok: bool, caret_rect: rl.Rectangle) {
-    start_cmd_count := len(commands^)
-
-    src := string(ed.sb.buf[:])
-    src_pos := 0
-
     // TODO(Apaar): Handle selection
     sel_pos := ed.state.selection[0]
     sel_loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
@@ -46,57 +41,50 @@ display_command_gen :: proc(
     cur_line_text_w: f32
     cur_line_max_text_h: f32
 
-    prev_src: string
-    prev_src_pos: int
+    src := string(ed.sb.buf[:])
 
-    in_pre := false
+    // Used to restore state when doing wrapping
 
-    for token in parser_next_token(&src, &src_pos) {
-        contains_caret := token.extents[0] <= sel_pos && sel_pos <= token.extents[1]
+    nodes := parser_parse_string(string(ed.sb.buf[:]))
+    nodes_iter := list_iterator_make(nodes)
+
+    min_line_height := f32(theme.fonts[.BODY].baseSize)
+
+    loop: for node in list_iterator_iterate(&nodes_iter) {
+        contains_caret := node.extents[0] <= sel_pos && sel_pos <= node.extents[1]
         
-        caret_idx := contains_caret ? sel_pos - token.extents[0] : -1
+        caret_idx := contains_caret ? sel_pos - node.extents[0] : -1
 
-        is_newline := false
-        is_spaces := false
-        is_backtick := false
+        font: ^rl.Font
+        all_spaces := false
 
-        switch sub in token.sub {
-            case Parser_Token_Newline: is_newline = true
-            case Parser_Token_Spaces: is_spaces = true
-            case Parser_Token_Backtick: is_backtick = true
-            case Parser_Token_Minus:
-            case Parser_Token_Word:
-            case:
+        #partial switch sub in node.sub {
+            case Node_Newline:
+                line_height := max(cur_line_max_text_h, min_line_height)
+
+                if contains_caret {
+                    caret_rect = {draw_pos.x, draw_pos.y, 2, line_height}
+                }
+
+                // Nothing else to draw, just reset
+                draw_pos.x = 0
+                draw_pos.y += line_height
+
+                cur_line_text_w = 0
+                cur_line_max_text_h = 0
+
+                continue loop
+            
+            case Node_Text:
+                if sub.pre do font = &theme.fonts[.PRE]
+                else do font = &theme.fonts[.BODY]
+
+                all_spaces = sub.all_spaces
         }
 
-        defer if is_backtick && in_pre {
-            in_pre = false
-        }
-
-        if is_backtick && !in_pre {
-            in_pre = true
-            is_backtick = false
-        }
-
-        font: ^rl.Font = in_pre ? &theme.fonts[.PRE] : &theme.fonts[.BODY]
         font_size := f32(font.baseSize)
 
-        if is_newline {
-            if contains_caret {
-                caret_rect = {draw_pos.x, draw_pos.y, 2, font_size}
-            }
-
-            // Nothing else to draw, just reset
-            draw_pos.x = 0
-            draw_pos.y += max(cur_line_max_text_h, font_size)
-
-            cur_line_text_w = 0
-            cur_line_max_text_h = 0
-
-            continue
-        }
-
-        token_str := parser_token_string(token)
+        token_str := node_edit_string(node^)
 
         token_size := rl.MeasureTextEx(
             font^,
@@ -135,14 +123,13 @@ display_command_gen :: proc(
             cur_line_text_w = 0
             cur_line_max_text_h = 0
 
-            if is_spaces {
+            if all_spaces {
                 // If the spaces cause a line break, just skip em
                 continue
             }
 
             // Move back to before this token, go down a line, and continue
-            src = prev_src
-            src_pos = prev_src_pos
+            list_iterator_move_back_to_prev_once(&nodes_iter)
 
             continue
         }
@@ -175,9 +162,6 @@ display_command_gen :: proc(
         }
 
         draw_pos.x += token_size.x
-
-        prev_src = src
-        prev_src_pos = src_pos
     }
 
     append(commands, Display_Command{
