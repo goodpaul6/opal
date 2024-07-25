@@ -25,8 +25,9 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Add support for `{` and `}` movements
 - [x] Modify `wrapped_lines` to be a display data structure instead
 - [x] Scroll cursor into view
+- [x] Parse text into useful nodes before display gen
 - [ ] Switch to GLFW + NanoVG instead
-- [ ] Parse text into useful nodes before display gen
+- [ ] Parse using `vendor:commonmark` instead
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add ability to flash status for a period of time
 - [ ] Add tab completion to commands
