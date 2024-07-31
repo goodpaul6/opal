@@ -4,6 +4,8 @@ import rl "vendor:raylib"
 import "core:slice"
 import "core:fmt"
 
+Theme_Font_ID :: distinct int
+
 Theme_Font_Variant :: enum {
     H1,
     BODY,
@@ -26,7 +28,7 @@ Theme :: struct {
 
     zoom_level: int,
 
-    // Loaded based on current zoom level
+    // Loaded based on current zoom level.
     fonts: [Theme_Font_Variant]rl.Font,
 }
 

@@ -27,6 +27,7 @@ A native alternative to Obsidian. Only has the features I care about.
 - [x] Scroll cursor into view
 - [x] Parse text into useful nodes before display gen
 - [ ] Switch to GLFW + NanoVG instead
+- [ ] Switch to array of lines as underlying storage
 - [ ] Parse using `vendor:commonmark` instead
 - [ ] Correctly highlight markdown TODO lists
 - [ ] Add ability to flash status for a period of time

@@ -6,7 +6,7 @@ import "core:fmt"
 import "core:mem"
 import "core:slice"
 import te "core:text/edit"
-import rl "vendor:raylib"
+import sdl "vendor:sdl2"
 
 Editor_Mode :: enum {
     NORMAL,
@@ -243,7 +243,7 @@ next_empty_line_byte_index :: proc(using ed: ^Editor, delta: int) -> int {
 }
 
 @(private="file")
-key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: te.Translation, valid: bool) {
+key_to_translation :: proc(key: sdl.Scancode, is_shift_pressed: bool) -> (t: te.Translation, valid: bool) {
     // For most cases we don't want shift to be pressed
     valid = !is_shift_pressed
 
@@ -255,8 +255,8 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
         case .B: t = .Word_Left
         // TODO(Apaar): Handle going to the end of the word, end of next word, etc
         case .W, .E: t = .Word_Right
-        case .ZERO: t = .Soft_Line_Start
-        case .FOUR: {
+        case .NUM0: t = .Soft_Line_Start
+        case .NUM4: {
             valid = is_shift_pressed
             t = .Soft_Line_End
         }
@@ -272,8 +272,8 @@ track_text_and_pos :: proc(using ed: ^Editor) {
     editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
 }
 
-editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
-    if key == .LEFT_SHIFT || key == .RIGHT_SHIFT || key == .LEFT_CONTROL || key == .RIGHT_CONTROL {
+editor_handle_keypress :: proc(using ed: ^Editor, key: sdl.Scancode, mods: Editor_Key_Mod_State) {
+    if key == .LSHIFT || key == .RSHIFT || key == .LCTRL || key == .RCTRL {
         // This should do nothing
         return
     }
@@ -328,11 +328,11 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 case .NONE:
             }
 
-            if key == .LEFT_BRACKET && .SHIFT in mods {
+            if key == .LEFTBRACKET && .SHIFT in mods {
                 state.selection[0] = next_empty_line_byte_index(ed, -1)
             }
 
-            if key == .RIGHT_BRACKET && .SHIFT in mods {
+            if key == .RIGHTBRACKET && .SHIFT in mods {
                 state.selection[0] = next_empty_line_byte_index(ed, 1)
             }
 
@@ -437,7 +437,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 mode = .NORMAL
             }
 
-            if key == .LEFT_BRACKET && .CTRL in mods {
+            if key == .LEFTBRACKET && .CTRL in mods {
                 editor_undo_commit(ed)
                 mode = .NORMAL
             }
@@ -459,7 +459,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 }
             }
 
-            if key == .ENTER {
+            if key == .RETURN {
                 te.input_text(&state, "\n")
             }
             
@@ -479,7 +479,7 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 mode = .NORMAL
             }
 
-            if key == .ENTER {
+            if key == .RETURN {
                 src := strings.to_string(command)
                 cmd, ok := command_parse(&src)
 
