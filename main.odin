@@ -46,16 +46,14 @@ main :: proc() {
     gl.Viewport(0, 0, WINDOW_INIT_WIDTH, WINDOW_INIT_HEIGHT)
     gl.ClearColor(0, 0, 0, 1.0)
 
-    /*
     default_theme_data := theme_data_make_default()
     defer theme_data_destroy(&default_theme_data)
 
-    theme := theme_make(&default_theme_data)
-    defer theme_destroy(&theme)
-    */
-
     nvc := nvgl.Create({.ANTI_ALIAS})
     defer nvgl.Destroy(nvc)
+
+    theme := theme_make(&default_theme_data, nvc, 0)
+    defer theme_destroy(&theme)
 
     ed := Editor{}
 
@@ -104,7 +102,7 @@ main :: proc() {
 
         nvg.BeginPath(nvc)
 
-        nvg.FontFaceId(nvc, font_id)
+        nvg.FontFaceId(nvc, theme.fonts[.H1])
         nvg.FontSize(nvc, 24)
         nvg.Text(nvc, 100, 100, "Hello, world!")
 
@@ -139,12 +137,12 @@ main :: proc() {
             }
 
             if key == .EQUAL && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, theme.zoom_level + 1)
+                theme_set_zoom_level(&theme, nvc, theme.zoom_level + 1)
                 continue
             }
 
             if key == .MINUS && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, theme.zoom_level - 1)
+                theme_set_zoom_level(&theme, nvc, theme.zoom_level - 1)
                 continue
             }
 

@@ -1,10 +1,10 @@
 package main
 
-import rl "vendor:raylib"
 import "core:slice"
 import "core:fmt"
+import nvg "vendor:nanovg"
 
-Theme_Font_ID :: distinct int
+Theme_Font_ID :: int
 
 Theme_Font_Variant :: enum {
     H1,
@@ -14,13 +14,18 @@ Theme_Font_Variant :: enum {
 
 Theme_Font_Sizes :: [Theme_Font_Variant]i32
 
+Theme_Font_Data :: struct {
+    name: string,
+    data: []byte,
+}
+
 // This is the static data for a given theme.
 Theme_Data :: struct {
     zoom_level_to_font_sizes: []Theme_Font_Sizes,
-    font_data: [Theme_Font_Variant][]byte,
+    font_data: [Theme_Font_Variant]Theme_Font_Data,
 
-    bg_color: rl.Color,
-    fg_color: rl.Color,
+    bg_color: nvg.Color,
+    fg_color: nvg.Color,
 }
 
 Theme :: struct {
@@ -29,7 +34,7 @@ Theme :: struct {
     zoom_level: int,
 
     // Loaded based on current zoom level.
-    fonts: [Theme_Font_Variant]rl.Font,
+    fonts: [Theme_Font_Variant]Theme_Font_ID,
 }
 
 theme_data_make_default :: proc() -> Theme_Data {
@@ -70,13 +75,13 @@ theme_data_make_default :: proc() -> Theme_Data {
         }),
 
         font_data = {
-            .H1 = slice.clone(INTER_DATA[:]),
-            .BODY = slice.clone(INTER_DATA[:]),
-            .PRE = slice.clone(COMMIT_MONO_DATA[:]),
+            .H1 = {"Inter", slice.clone(INTER_DATA[:])},
+            .BODY = {"Inter", slice.clone(INTER_DATA[:])},
+            .PRE = {"Commit Mono", slice.clone(COMMIT_MONO_DATA[:])}
         },
 
-        bg_color = {0x16, 0x16, 0x1D, 0xFF},
-        fg_color = {0xDC, 0xD7, 0xBA, 0xFF},
+        bg_color = nvg.ColorHex(0x16161dff),
+        fg_color = nvg.ColorHex(0xdcd7baff),
     }
 }
 
@@ -84,57 +89,47 @@ theme_data_destroy :: proc(using data: ^Theme_Data) {
     delete(zoom_level_to_font_sizes)
 
     for variant in Theme_Font_Variant {
-        delete(font_data[variant])
+        delete(font_data[variant].data)
     }
 }
 
-theme_make :: proc(data: ^Theme_Data, zoom_level := 0) -> Theme {
+theme_make :: proc(data: ^Theme_Data, nvc: ^nvg.Context, zoom_level: int) -> Theme {
     font_sizes := data.zoom_level_to_font_sizes[zoom_level]
+
+    load_if_not_loaded :: proc(nvc: ^nvg.Context, data: Theme_Font_Data) -> int {
+        res := nvg.FindFont(nvc, data.name)
+
+        if res >= 0 {
+            return res
+        }
+
+        return nvg.CreateFontMem(nvc, data.name, data.data, false)
+    }
 
     return {
         data = data,
         zoom_level = zoom_level,
         fonts = {
-            .H1 = rl.LoadFontFromMemory(
-                fileType=".ttf",
-                fileData=raw_data(data.font_data[.H1]),
-                dataSize=i32(len(data.font_data[.H1])),
-                fontSize=font_sizes[.H1],
-                codepoints=nil,
-                codepointCount=0,
-            ),
-            .BODY = rl.LoadFontFromMemory(
-                fileType=".ttf",
-                fileData=raw_data(data.font_data[.BODY]),
-                dataSize=i32(len(data.font_data[.BODY])),
-                fontSize=font_sizes[.BODY],
-                codepoints=nil,
-                codepointCount=0,
-            ),
-            .PRE = rl.LoadFontFromMemory(
-                fileType=".otf",
-                fileData=raw_data(data.font_data[.PRE]),
-                dataSize=i32(len(data.font_data[.PRE])),
-                fontSize=font_sizes[.PRE],
-                codepoints=nil,
-                codepointCount=0,
-            ),
+            .H1 = load_if_not_loaded(nvc, data.font_data[.H1]),
+            .BODY = load_if_not_loaded(nvc, data.font_data[.BODY]),
+            .PRE = load_if_not_loaded(nvc, data.font_data[.PRE]),
         },
     }
 }
 
 theme_destroy :: proc(using theme: ^Theme) {
-    for &font in fonts {
-        rl.UnloadFont(font)
-    }
+    // TODO(Apaar): Figure out a way to unload fonts from NanoVG?
 }
 
-theme_set_zoom_level :: proc(theme: ^Theme, raw_zoom_level: int) {
+theme_set_zoom_level :: proc(theme: ^Theme, nvc: ^nvg.Context, raw_zoom_level: int) {
     data := theme.data
     theme_destroy(theme)
 
     zoom_level := clamp(raw_zoom_level, 0, len(data.zoom_level_to_font_sizes) - 1)
 
-    theme^ = theme_make(data, zoom_level)
+    theme^ = theme_make(data, nvc, zoom_level)
 }
 
+theme_font_variant_size :: proc(theme: ^Theme, variant: Theme_Font_Variant) -> i32 {
+    return theme.data.zoom_level_to_font_sizes[theme.zoom_level][variant]
+}

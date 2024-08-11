@@ -1,39 +1,29 @@
 package main
 
 import "core:strings"
-import rl "vendor:raylib"
+import nvg "vendor:nanovg"
+import sdl "vendor:sdl2"
 
 INSERT_CARET_W :: 2
 
 Editor_Display_State :: struct {
-    bounds: rl.Rectangle,
+    bounds: Rect,
     scroll_pos: [2]f32,
-    prev_caret_rect: rl.Rectangle,
+    prev_caret_rect: Rect,
 }
 
+// Assumes fill and stroke color is set up correctly
 @(private="file")
 draw_line :: proc(
     using ed: ^Editor, 
-    theme: ^Theme, 
+    nvc: ^nvg.Context,
     line: string, 
     pos: [2]f32, 
     caret_pos: int, 
     fixed_caret_w: f32, 
-    chop_caret: bool
+    chop_caret: bool,
 ) {
-    font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
-
-    text := strings.clone_to_cstring(line, context.temp_allocator)
-
-    rl.DrawTextEx(
-        font=font,
-        text=text,
-        position=pos,
-        fontSize=font_size,
-        spacing=0,
-        tint=theme.data.fg_color,
-    )
+    nvg.Text(nvc, pos.x, pos.y, line)
 
     if caret_pos < 0 {
         return
@@ -41,31 +31,36 @@ draw_line :: proc(
 
     // Draw caret
     sub_len := caret_pos
-
-    sub_text := strings.clone_to_cstring(line[:sub_len], context.temp_allocator)
+    sub_text := line[:sub_len]
 
     // HACK(Apaar): We subtract the size of e.g. "abc" from "ab" to get the caret size over "c"
-    sub_text_plus_current := sub_len < len(line) ? strings.clone_to_cstring(line[:sub_len+1], context.temp_allocator) : sub_text
+    sub_text_plus_current := sub_len < len(line) ? line[:sub_len+1] : sub_text
 
     // Place the caret right after this
-    sub_text_size := rl.MeasureTextEx(font, sub_text, fontSize=font_size, spacing=0)
-    sub_text_plus_current_size := rl.MeasureTextEx(font, sub_text_plus_current, fontSize=font_size, spacing=0)
+    sub_text_bounds := [4]f32{}
+    sub_text_plus_current_bounds := [4]f32{}
 
-    calc_caret_w := sub_text_plus_current_size.x - sub_text_size.x
+    _ = nvg.TextBounds(nvc, pos.x, pos.y, line, &sub_text_bounds)
+    _ = nvg.TextBounds(nvc, pos.x, pos.y, line, &sub_text_plus_current_bounds)
+
+    sub_text_w := sub_text_bounds[2] - sub_text_bounds[0]
+    sub_text_plus_current_w := sub_text_plus_current_bounds[2] - sub_text_plus_current_bounds[0]
+
+    sub_text_h := sub_text_bounds[3] - sub_text_bounds[1]
+
+    calc_caret_w := sub_text_plus_current_w - sub_text_w
 
     if calc_caret_w == 0 {
         calc_caret_w = 5
     }
 
-    rl.DrawRectangleRec(
-        rl.Rectangle{
-            x = pos.x + sub_text_size.x,
-            y = pos.y + (chop_caret ? sub_text_size.y / 2 : 0),
-            width = fixed_caret_w > 0 ? fixed_caret_w : calc_caret_w,
-            height = chop_caret ? sub_text_size.y / 2 : sub_text_size.y,
-        },
-        theme.data.fg_color,
-    )
+    caret_w := fixed_caret_w > 0 ? fixed_caret_w : calc_caret_w
+
+    nvg.BeginPath(nvc)
+
+    nvg.Rect(nvc, pos.x + sub_text_w, pos.y, caret_w, sub_text_h)
+
+    nvg.Fill(nvc)
 }
 
 to_cstring :: proc(builder: ^strings.Builder) -> cstring {
@@ -78,7 +73,7 @@ to_cstring :: proc(builder: ^strings.Builder) -> cstring {
 editor_display_begin :: proc(
     using ed: ^Editor, 
     theme: ^Theme, 
-    bounds: rl.Rectangle,
+    bounds: Rect,
 ) {
     display.bounds = bounds
 }
@@ -89,33 +84,34 @@ editor_display_end :: proc(using ed: ^Editor) {
 }
 
 editor_status_line_height :: proc(theme: ^Theme) -> f32{
-    return f32(theme.fonts[.BODY].baseSize)
+    return f32(theme_font_variant_size(theme, .BODY))
 }
 
-editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
+editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme, nvc: ^nvg.Context) {
     font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
+    font_size := f32(theme_font_variant_size(theme, .BODY))
 
-    blink := int(rl.GetTime() * 1000 / 300) % 2 == 0
+    blink := int(sdl.GetTicks() / 300) % 2 == 0
 
     commands := make([dynamic]Display_Command, context.temp_allocator)
 
     _, caret_rect := display_command_gen(
         ed, 
         theme, 
-        {display.bounds.width, display.bounds.height}, 
+        nvc,
+        {display.bounds.w, display.bounds.h},  
         &commands,
     )
 
     if should_scroll_cursor_into_view {
         top := caret_rect.y
-        bottom := caret_rect.y + caret_rect.height
+        bottom := caret_rect.y + caret_rect.h
 
         // TODO(Apaar): Handle horiz scroll
         if (top - display.scroll_pos.y) < 0 {
             display.scroll_pos.y = top
-        } else if (bottom - display.scroll_pos.y) > display.bounds.height {
-            display.scroll_pos.y = bottom - display.bounds.height
+        } else if (bottom - display.scroll_pos.y) > display.bounds.h {
+            display.scroll_pos.y = bottom - display.bounds.h
         } else {
             // In bounds, don't need to scroll anymore
             should_scroll_cursor_into_view = false
@@ -123,16 +119,18 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
     }
 
     {
-        rl.BeginScissorMode(
-            i32(display.bounds.x), 
-            i32(display.bounds.y),
-            i32(display.bounds.width),
-            i32(display.bounds.height),
+        nvg.SaveScoped(nvc)
+        nvg.Scissor(
+            nvc, 
+            display.bounds.x, 
+            display.bounds.y, 
+            display.bounds.w, 
+            display.bounds.h,
         )
-        defer rl.EndScissorMode()
 
         display_command_run_all(
             commands[:], 
+            nvc,
             {display.bounds.x, display.bounds.y}, 
             display.scroll_pos,
         )
@@ -140,6 +138,7 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
 
     {
         // Draw status bar
+        /*
 
         ren_size := [?]f32{
             f32(rl.GetRenderWidth()), 
@@ -160,13 +159,14 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
         caret_pos := mode == .COMMAND ? len(status.buf) : -1
 
         draw_line(
-            ed, 
-            theme, 
+            ed,
+            nvc,
             strings.to_string(status), 
             {0, ren_size.y - font_size}, 
             caret_pos, 
             fixed_caret_w=INSERT_CARET_W, 
             chop_caret=false
         )
+        */
     }
 }
