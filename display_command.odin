@@ -29,8 +29,6 @@ measure_text :: proc(nvc: ^nvg.Context, text: string) -> [2]f32 {
 
     nvg.TextBounds(nvc, 0, 0, text, &bounds)
 
-    fmt.println(bounds)
-
     return {bounds[2] - bounds[0], bounds[3] - bounds[1]}
 }
 
@@ -95,6 +93,7 @@ display_command_gen :: proc(
         }
 
         nvg.FontFaceId(nvc, font)
+        nvg.TextAlignVertical(nvc, .TOP)
 
         token_str := node_literal_string(node^)
         token_size := measure_text(nvc, token_str)
@@ -191,8 +190,9 @@ display_command_run_all :: proc(
         switch sub in cmd.sub {
             case Display_Command_Text: {
                 nvg.FontFaceId(nvc, sub.font)
+                nvg.TextAlignVertical(nvc, .TOP)
                 nvg.FillColor(nvc, sub.color)
-                nvg.Text(nvc, pos.x, pos.y + 20, sub.text)
+                nvg.Text(nvc, pos.x, pos.y, sub.text)
             }
 
             case Display_Command_Rect: {
