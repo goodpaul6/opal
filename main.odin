@@ -43,6 +43,8 @@ main :: proc() {
     gl_ctx := sdl.GL_CreateContext(window)
     defer sdl.GL_DeleteContext(gl_ctx)
 
+    sdl.GL_SetSwapInterval(0)
+
     // Odin bundles the OpenGL loader, which is nice
     gl.load_up_to(3, 3, sdl.gl_set_proc_address)
 
@@ -120,7 +122,7 @@ main :: proc() {
         editor_display_end(&ed)
 
         sdl.GL_SwapWindow(window)
-
+        
         free_all(context.temp_allocator)
     }
 }

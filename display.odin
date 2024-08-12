@@ -130,6 +130,7 @@ editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme, nvc: ^nvg.Context)
 
         display_command_run_all(
             commands[:], 
+            theme,
             nvc,
             {display.bounds.x, display.bounds.y}, 
             display.scroll_pos,

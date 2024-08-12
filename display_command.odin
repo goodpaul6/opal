@@ -93,6 +93,7 @@ display_command_gen :: proc(
         }
 
         nvg.FontFaceId(nvc, font)
+        nvg.FontSize(nvc, f32(theme_font_variant_size(theme, .BODY)))
         nvg.TextAlignVertical(nvc, .TOP)
 
         token_str := node_literal_string(node^)
@@ -180,6 +181,7 @@ display_command_gen :: proc(
 
 display_command_run_all :: proc(
     commands: []Display_Command, 
+    theme: ^Theme,
     nvc: ^nvg.Context,
     top_left: [2]f32, 
     scroll_pos: [2]f32,
@@ -192,6 +194,9 @@ display_command_run_all :: proc(
                 nvg.FontFaceId(nvc, sub.font)
                 nvg.TextAlignVertical(nvc, .TOP)
                 nvg.FillColor(nvc, sub.color)
+
+                nvg.FontSize(nvc, f32(theme_font_variant_size(theme, .BODY)))
+
                 nvg.Text(nvc, pos.x, pos.y, sub.text)
             }
 
