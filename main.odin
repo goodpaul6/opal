@@ -35,6 +35,9 @@ main :: proc() {
         panic(sdl.GetErrorString())
     }
 
+    // We don't want to enable text input unless we're in insert mode
+    sdl.StopTextInput()
+
     defer sdl.DestroyWindow(window)
 
     gl_ctx := sdl.GL_CreateContext(window)
@@ -78,8 +81,9 @@ main :: proc() {
                 case .QUIT: break main_loop
                 case .KEYDOWN:
                     editor_handle_keypress(&ed, event.key.keysym.scancode, {})
+                    
                 case .TEXTINPUT:
-                    str := string(event.text.text[:])
+                    str := string(cstring(raw_data(event.text.text[:])))
                     for ch in str {
                         editor_handle_charpress(&ed, ch)
                     }
@@ -94,88 +98,26 @@ main :: proc() {
         nvg.BeginFrame(nvc, f32(window_w), f32(window_h), 1)
         defer nvg.EndFrame(nvc)
 
+        page_w := f32(window_w) * PAGE_WIDTH_PCT
+        margin_side := f32(window_h) * ((1 - PAGE_WIDTH_PCT) / 2)
+
         nvg.BeginPath(nvc)
-        nvg.FillColor(nvc, nvg.RGB(0x16, 0x16, 0x1d))
+        nvg.FillColor(nvc, theme.data.bg_color)
+        nvg.Rect(nvc, 0, 0, f32(window_w), f32(window_h))
         nvg.Fill(nvc)
 
-        nvg.FillColor(nvc, nvg.RGB(0xdc, 0xd7, 0xba))
+        nvg.FontFaceId(nvc, theme.fonts[.BODY])
+        
+        editor_display_begin(&ed, &theme, {
+            margin_side,
+            PAGE_MARGIN_TOP,
+            page_w,
+            f32(window_h) - editor_status_line_height(&theme) - PAGE_MARGIN_BOTTOM,
+        })
 
-        nvg.BeginPath(nvc)
+        editor_display_draw(&ed, &theme, nvc)
 
-        nvg.FontFaceId(nvc, theme.fonts[.H1])
-        nvg.FontSize(nvc, 24)
-        nvg.Text(nvc, 100, 100, "Hello, world!")
-
-        nvg.BeginPath(nvc)
-        nvg.Circle(nvc, 200, 200, 50)
-        nvg.Fill(nvc)
-
-        /*
-        switch ed.mode {
-            case .NORMAL, .COMMAND: rl.SetMouseCursor(.DEFAULT)
-            case .INSERT: rl.SetMouseCursor(.IBEAM)
-        }
-
-        for {
-            ch := rl.GetCharPressed()
-            if ch == 0 {
-                break
-            }
-            
-            editor_handle_charpress(&ed, ch)
-        }
-
-        key_mods := Editor_Key_Mod_State{}
-
-        if rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) do key_mods += {.CTRL}
-        if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) do key_mods += {.SHIFT}
-
-        for {
-            key := rl.GetKeyPressed()
-            if key == .KEY_NULL {
-                break
-            }
-
-            if key == .EQUAL && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, nvc, theme.zoom_level + 1)
-                continue
-            }
-
-            if key == .MINUS && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, nvc, theme.zoom_level - 1)
-                continue
-            }
-
-            editor_handle_keypress(&ed, key, key_mods)
-        }
-
-        for key in rl.KeyboardKey {
-            if key_repeat_should_repeat(&kr, key, 20) {
-                editor_handle_keypress(&ed, key, key_mods)
-            }
-        }
-
-        render_w := f32(rl.GetRenderWidth())
-        render_h := f32(rl.GetRenderHeight())
-
-        page_w := render_w * PAGE_WIDTH_PCT
-        margin_side := render_w * ((1 - PAGE_WIDTH_PCT) / 2)
-
-        rl.BeginDrawing()
-            rl.ClearBackground(theme.data.bg_color)
-
-            editor_display_begin(&ed, &theme, {
-                margin_side,
-                PAGE_MARGIN_TOP,
-                page_w,
-                render_h - editor_status_line_height(&theme) - PAGE_MARGIN_BOTTOM,
-            })
-
-            editor_display_draw(&ed, &theme)
-
-            editor_display_end(&ed)
-        rl.EndDrawing()
-        */    
+        editor_display_end(&ed)
 
         sdl.GL_SwapWindow(window)
 

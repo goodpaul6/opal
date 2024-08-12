@@ -59,7 +59,7 @@ display_command_gen :: proc(
     nodes_iter := list_iterator_make(nodes)
 
     _, _, min_line_height := nvg.TextMetrics(nvc)
-
+ 
     loop: for node in list_iterator_iterate(&nodes_iter) {
         contains_caret := node.extents[0] <= sel_pos && sel_pos <= node.extents[1]
         
@@ -103,7 +103,7 @@ display_command_gen :: proc(
                 append(commands, Display_Command{
                     pos = draw_pos,
                     sub = Display_Command_Text{
-                        text = token_str,
+                        text = strings.clone(token_str, context.temp_allocator),
                         font = font,
                         color = theme.data.fg_color,
                     },
@@ -163,14 +163,16 @@ display_command_gen :: proc(
         draw_pos.x += token_size.x
     }
 
-    append(commands, Display_Command{
-        pos = {caret_rect.x, caret_rect.y},
-        sub = Display_Command_Rect{
-            w = caret_rect.w,
-            h = caret_rect.h,
-            color = theme.data.fg_color,
-        },
-    })
+    if(caret_rect.w > 0 && caret_rect.h > 0) {
+        append(commands, Display_Command{
+            pos = {caret_rect.x, caret_rect.y},
+            sub = Display_Command_Rect{
+                w = caret_rect.w,
+                h = caret_rect.h,
+                color = theme.data.fg_color,
+            },
+        })
+    }
 
     return true, caret_rect
 }
@@ -186,11 +188,15 @@ display_command_run_all :: proc(
 
         switch sub in cmd.sub {
             case Display_Command_Text: {
-                nvg.StrokeColor(nvc, sub.color)
-                nvg.Text(nvc, pos.x, pos.y, sub.text)
+                nvg.FontFaceId(nvc, sub.font)
+
+                nvg.FillColor(nvc, sub.color)
+                nvg.Text(nvc, pos.x, pos.y + 20, sub.text)
             }
 
             case Display_Command_Rect: {
+                assert(sub.w > 0 && sub.h > 0)
+
                 nvg.BeginPath(nvc)
 
                 nvg.FillColor(nvc, sub.color)

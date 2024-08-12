@@ -52,6 +52,7 @@ Editor_Undo_Item :: struct {
 
 Editor :: struct {
     mode: Editor_Mode,
+    prev_mode: Editor_Mode,
 
     sb: strings.Builder,
     state: te.State,
@@ -173,14 +174,20 @@ editor_begin_frame :: proc(using ed: ^Editor) {
 
     switch(mode) {
         case .INSERT: {
+            sdl.StartTextInput()
+
             editor_set_status_to_string(ed, "-- INSERT --")
         }
 
         case .NORMAL: {
+            sdl.StopTextInput()
+
             editor_set_status_to_string(ed, "")
         }
 
         case .COMMAND: {
+            sdl.StartTextInput()
+
             // HACK(Apaar): Not necessarily a good idea to hijack the status for this but ok
             editor_set_status_to_string(ed, fmt.tprintf(":%s", strings.to_string(command)))
         }

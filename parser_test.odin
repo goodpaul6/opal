@@ -10,16 +10,19 @@ test_parser :: proc(t: ^testing.T) {
 
     testing.expect_value(t, list.head^, Node{
         next = list.head.next,
-        sub = Node_Text{false, "hello"},
+        extents = {0, 5},
+        sub = Node_Text{false, false, "hello"},
     })
 
     testing.expect_value(t, list.head.next^, Node{
         next = list.head.next.next,
-        sub = Node_Text{false, " "},
+        extents = {5, 6},
+        sub = Node_Text{false, true, " "},
     })
 
     testing.expect_value(t, list.head.next.next^, Node{
         next = nil,
-        sub = Node_Text{false, "world"},
+        extents = {6, 11},
+        sub = Node_Text{false, false, "world"},
     })
 }

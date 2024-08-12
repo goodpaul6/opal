@@ -80,8 +80,8 @@ theme_data_make_default :: proc() -> Theme_Data {
             .PRE = {"Commit Mono", slice.clone(COMMIT_MONO_DATA[:])}
         },
 
-        bg_color = nvg.ColorHex(0x16161dff),
-        fg_color = nvg.ColorHex(0xdcd7baff),
+        bg_color = nvg.ColorHex(0xff16161d),
+        fg_color = nvg.ColorHex(0xffdcd7ba),
     }
 }
 
