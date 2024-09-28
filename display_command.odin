@@ -2,17 +2,17 @@ package main
 
 import "core:strings"
 import "core:fmt"
-import nvg "vendor:nanovg"
+import rl "vendor:raylib"
 
 Display_Command_Text :: struct {
     text: string,
-    font: Theme_Font_ID,
-    color: nvg.Color,
+    font: ^rl.Font,
+    color: rl.Color,
 }
 
 Display_Command_Rect :: struct {
     w, h: f32,
-    color: nvg.Color,
+    color: rl.Color,
 }
 
 Display_Command :: struct {
@@ -23,24 +23,14 @@ Display_Command :: struct {
     }
 }
 
-@(private="file")
-measure_text :: proc(nvc: ^nvg.Context, text: string) -> [2]f32 {
-    bounds := [4]f32{}
-
-    nvg.TextBounds(nvc, 0, 0, text, &bounds)
-
-    return {bounds[2] - bounds[0], bounds[3] - bounds[1]}
-}
-
 // HACK(Apaar): I return the caret rectangle from this for smoothly scrolling
 // the cursor into the bounds
 display_command_gen :: proc(
     ed: ^Editor, 
     theme: ^Theme,
-    nvc: ^nvg.Context,
     bounds_size: [2]f32,
     commands: ^[dynamic]Display_Command,
-) -> (ok: bool, caret_rect: Rect) {
+) -> (ok: bool, caret_rect: rl.Rectangle) {
     // TODO(Apaar): Handle selection
     sel_pos := ed.state.selection[0]
     sel_loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
@@ -58,14 +48,14 @@ display_command_gen :: proc(
     nodes := parser_parse_string(string(ed.sb.buf[:]))
     nodes_iter := list_iterator_make(nodes)
 
-    _, _, min_line_height := nvg.TextMetrics(nvc)
- 
+    min_line_height := f32(theme.fonts[.BODY].baseSize)
+
     loop: for node in list_iterator_iterate(&nodes_iter) {
         contains_caret := node.extents[0] <= sel_pos && sel_pos <= node.extents[1]
         
         caret_idx := contains_caret ? sel_pos - node.extents[0] : -1
 
-        font: Theme_Font_ID
+        font: ^rl.Font
         all_spaces := false
 
         #partial switch sub in node.sub {
@@ -86,18 +76,22 @@ display_command_gen :: proc(
                 continue loop
             
             case Node_Text:
-                if sub.pre do font = theme.fonts[.PRE]
-                else do font = theme.fonts[.BODY]
+                if sub.pre do font = &theme.fonts[.PRE]
+                else do font = &theme.fonts[.BODY]
 
                 all_spaces = sub.all_spaces
         }
 
-        nvg.FontFaceId(nvc, font)
-        nvg.FontSize(nvc, f32(theme_font_variant_size(theme, .BODY)))
-        nvg.TextAlignVertical(nvc, .TOP)
+        font_size := f32(font.baseSize)
 
-        token_str := node_literal_string(node^)
-        token_size := measure_text(nvc, token_str)
+        token_str := node_edit_string(node^)
+
+        token_size := rl.MeasureTextEx(
+            font^,
+            strings.clone_to_cstring(token_str, context.temp_allocator),
+            font_size,
+            spacing=0,
+        )
 
         if cur_line_text_w + token_size.x > bounds_size.x {
             // TODO(Apaar): Split individual tokens longer than wrap_w. Right now we just draw.
@@ -105,14 +99,14 @@ display_command_gen :: proc(
                 append(commands, Display_Command{
                     pos = draw_pos,
                     sub = Display_Command_Text{
-                        text = strings.clone(token_str, context.temp_allocator),
+                        text = token_str,
                         font = font,
                         color = theme.data.fg_color,
                     },
                 })
 
                 draw_pos.x = 0
-                draw_pos.y += max(cur_line_max_text_h, min_line_height)
+                draw_pos.y += max(cur_line_max_text_h, font_size)
 
                 cur_line_text_w = 0
                 cur_line_max_text_h = 0
@@ -124,7 +118,7 @@ display_command_gen :: proc(
             draw_pos.x = 0
 
             // In case this is the first token, it will hit the font_size case
-            draw_pos.y += max(cur_line_max_text_h, min_line_height)
+            draw_pos.y += max(cur_line_max_text_h, font_size)
 
             cur_line_text_w = 0
             cur_line_max_text_h = 0
@@ -157,7 +151,12 @@ display_command_gen :: proc(
 
         if caret_idx >= 0 {
             sub_text := token_str[:caret_idx]
-            sub_text_size := measure_text(nvc, sub_text)
+            sub_text_size := rl.MeasureTextEx(
+                font^,
+                strings.clone_to_cstring(sub_text, context.temp_allocator),
+                font_size,
+                spacing=0,
+            )
 
             caret_rect = {draw_pos.x + sub_text_size.x, draw_pos.y, 2, sub_text_size.y}
         }
@@ -165,24 +164,20 @@ display_command_gen :: proc(
         draw_pos.x += token_size.x
     }
 
-    if(caret_rect.w > 0 && caret_rect.h > 0) {
-        append(commands, Display_Command{
-            pos = {caret_rect.x, caret_rect.y},
-            sub = Display_Command_Rect{
-                w = caret_rect.w,
-                h = caret_rect.h,
-                color = theme.data.fg_color,
-            },
-        })
-    }
+    append(commands, Display_Command{
+        pos = {caret_rect.x, caret_rect.y},
+        sub = Display_Command_Rect{
+            w = caret_rect.width,
+            h = caret_rect.height,
+            color = theme.data.fg_color,
+        },
+    })
 
     return true, caret_rect
 }
 
 display_command_run_all :: proc(
     commands: []Display_Command, 
-    theme: ^Theme,
-    nvc: ^nvg.Context,
     top_left: [2]f32, 
     scroll_pos: [2]f32,
 ) {
@@ -191,24 +186,26 @@ display_command_run_all :: proc(
 
         switch sub in cmd.sub {
             case Display_Command_Text: {
-                nvg.FontFaceId(nvc, sub.font)
-                nvg.TextAlignVertical(nvc, .TOP)
-                nvg.FillColor(nvc, sub.color)
-
-                nvg.FontSize(nvc, f32(theme_font_variant_size(theme, .BODY)))
-
-                nvg.Text(nvc, pos.x, pos.y, sub.text)
+                rl.DrawTextEx(
+                    sub.font^,
+                    strings.clone_to_cstring(sub.text, context.temp_allocator),
+                    position=pos,
+                    fontSize=f32(sub.font.baseSize),
+                    spacing=0,
+                    tint=sub.color,
+                )
             }
 
             case Display_Command_Rect: {
-                assert(sub.w > 0 && sub.h > 0)
-
-                nvg.BeginPath(nvc)
-
-                nvg.FillColor(nvc, sub.color)
-                nvg.Rect(nvc, pos.x, pos.y, sub.w, sub.h)
-
-                nvg.Fill(nvc)
+                rl.DrawRectangleRec(
+                    rl.Rectangle{
+                        pos.x,
+                        pos.y,
+                        sub.w,
+                        sub.h,
+                    },
+                    sub.color,
+                )
             }
         }
     }

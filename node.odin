@@ -21,7 +21,7 @@ Node :: struct {
     sub: Node_Sub,
 }
 
-node_literal_string :: proc(node: Node) -> string {
+node_edit_string :: proc(node: Node) -> string {
     switch sub in node.sub {
         case Node_Text: return sub.text
         case Node_Todo_Marker: return sub.done ? "- [x]" : "- [ ]"
