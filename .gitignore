@@ -3,3 +3,4 @@
 *.pdb
 *.raddbg
 *.rdi
+opal.o
