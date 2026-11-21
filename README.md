@@ -8,6 +8,8 @@ In insert mode, press Enter at the end of a list item to continue it. Numbered l
 
 In insert mode and at the command prompt, Ctrl+W deletes the previous word. Alt+Left/Right or Alt+B/F move by word, and Alt+Backspace/Delete delete backward/forward by word. On macOS, use Option as Alt. Ctrl+A/Ctrl+E and Home/End move to the start/end of the line.
 
+In Normal mode, press `u` to undo and Ctrl+R to redo.
+
 ## Rendering checks
 
 Opal uses raylib. Capture a fixed-size PNG using the same editor renderer as the interactive window:

@@ -96,6 +96,50 @@ test_open_line_below_or_above_current_line :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_redo_shortcut_survives_navigation_and_empty_insert :: proc(t: ^testing.T) {
+    ed: Editor
+    editor_init(&ed)
+    defer editor_destroy(&ed)
+    defer {
+        for item in ed.undos do delete(item.data)
+        for item in ed.redos do delete(item.data)
+        delete(ed.undo_trackers)
+        delete(ed.undos)
+        delete(ed.redos)
+    }
+    strings.write_string(&ed.sb, "abc")
+    ed.prev_frame_sel = {1, 1}
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+
+    editor_handle_keypress(&ed, .X, {})
+    editor_handle_keypress(&ed, .U, {})
+    testing.expect_value(t, editor_get_text(&ed), "abc")
+    editor_handle_keypress(&ed, .G, {.SHIFT})
+    testing.expect_value(t, ed.state.selection[0], 3)
+    editor_handle_keypress(&ed, .H, {})
+    editor_handle_keypress(&ed, .A, {})
+    editor_handle_keypress(&ed, .ESCAPE, {})
+    testing.expect_value(t, ed.state.selection[0], 3)
+
+    editor_handle_keypress(&ed, .R, {})
+    testing.expect_value(t, ed.pending_action, Editor_Action.REPLACE)
+    live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.R}, []rune{'r'}, {.CTRL}, false, false)
+    testing.expect_value(t, ed.pending_action, Editor_Action.NONE)
+    testing.expect_value(t, editor_get_text(&ed), "ac")
+    testing.expect_value(t, ed.state.selection, [2]int{2, 2})
+
+    editor_handle_keypress(&ed, .U, {})
+    editor_handle_keypress(&ed, .I, {})
+    editor_handle_charpress(&ed, 'z')
+    editor_handle_keypress(&ed, .ESCAPE, {})
+    editor_handle_keypress(&ed, .R, {.CTRL})
+    testing.expect_value(t, editor_get_text(&ed), "abzc")
+    testing.expect_value(t, len(ed.redos), 0)
+    testing.expect_value(t, ed.pending_action, Editor_Action.NONE)
+}
+
+@(test)
 test_insert_word_shortcuts_preserve_utf8_and_undo :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)

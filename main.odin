@@ -97,7 +97,7 @@ main :: proc() {
         }
         shortcut_repeated := false
         if len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods) {
-            shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .E, .F, .W}
+            shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .E, .F, .R, .W}
             for key in shortcut_keys {
                 if rl.IsKeyPressedRepeat(key) && live_editor_shortcut_suppresses_chars(ed.mode, key, key_mods, command_down) {
                     shortcut_repeated = true
@@ -188,7 +188,7 @@ live_editor_shortcut_suppresses_chars :: proc(
     mode: Editor_Mode, key: rl.KeyboardKey, mods: Editor_Key_Mod_State, command_down: bool,
 ) -> bool {
     if .CTRL in mods && live_zoom_shortcut_delta(key, mods, command_down) != 0 do return true
-    if mode == .NORMAL do return false
+    if mode == .NORMAL do return key == .R && .CTRL in mods
     _, shortcut := editor_text_letter_shortcut(key, mods)
     return shortcut
 }

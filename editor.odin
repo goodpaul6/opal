@@ -484,11 +484,14 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
 
     outer_switch: switch ed.mode {
         case .NORMAL: {
+            if key == .R && .CTRL in mods {
+                ed.pending_action = .NONE
+                editor_redo(ed)
+                break
+            }
+
             switch ed.pending_action {
                 case .GO: {
-                    track_text_and_pos(ed)
-                    defer editor_undo_commit(ed)
-
                     if key == .G {
                         te.move_to(&ed.state, .Start)
                     }
@@ -549,8 +552,6 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
             }
 
             if key == .R {
-                track_text_and_pos(ed)
-                
                 ed.pending_action = .REPLACE
 
                 break
@@ -558,11 +559,7 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
 
             if key == .G {
                 if .SHIFT in mods {
-                    track_text_and_pos(ed)
-
                     te.move_to(&ed.state, .End)
-
-                    editor_undo_commit(ed)
                 } else {
                     ed.pending_action = .GO
                 }
@@ -572,10 +569,6 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
 
             if key == .U {
                 editor_undo(ed)
-            }
-
-            if key == .R && .CTRL in mods {
-                editor_redo(ed)
             }
 
             if key == .X {
@@ -712,6 +705,7 @@ editor_handle_charpress :: proc(ed: ^Editor, ch: rune) {
     switch ed.mode {
         case .NORMAL: {
             if ed.pending_action == .REPLACE {
+                track_text_and_pos(ed)
                 editor_delete_to(ed, .Right)
                 editor_insert_rune(ed, ch)
                 te.move_to(&ed.state, .Left)

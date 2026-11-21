@@ -10,18 +10,16 @@ editor_undo_track :: proc(ed: ^Editor, data: $T) {
 }
 
 editor_undo_commit :: proc(ed: ^Editor) {
-    for &item in ed.redos {
-        delete(item.data)
-    }
-    clear(&ed.redos)
-
-    placed_nil := false
+    batch_start := len(ed.undos)
+    text_changed := false
 
     for tracker in ed.undo_trackers {
         is_equal := false
 
         switch v in tracker.data {
-            case ^[dynamic]byte: is_equal = slice.equal(tracker.orig_data, v[:])
+            case ^[dynamic]byte:
+                is_equal = slice.equal(tracker.orig_data, v[:])
+                text_changed = text_changed || !is_equal
             case []byte: is_equal = slice.equal(tracker.orig_data, v[:])
         }
 
@@ -30,10 +28,9 @@ editor_undo_commit :: proc(ed: ^Editor) {
             continue
         }
 
-        if !placed_nil {
+        if len(ed.undos) == batch_start {
             // Add nil undo item to delimit changes
             append(&ed.undos, Editor_Undo_Item{})
-            placed_nil = true
         }
 
         item := Editor_Undo_Item{
@@ -45,6 +42,15 @@ editor_undo_commit :: proc(ed: ^Editor) {
     }
 
     clear(&ed.undo_trackers)
+    if !text_changed {
+        // Cursor changes and empty insert sessions leave redo available.
+        for item in ed.undos[batch_start:] do delete(item.data)
+        resize(&ed.undos, batch_start)
+        return
+    }
+
+    for item in ed.redos do delete(item.data)
+    clear(&ed.redos)
 }
 
 editor_apply_undo_items :: proc(
@@ -102,10 +108,17 @@ editor_apply_undo_items :: proc(
 editor_undo :: proc(ed: ^Editor) {
     if len(ed.undos) > 0 do display_invalidate_from(ed, 0)
     editor_apply_undo_items(&ed.undos, &ed.redos)
+    editor_clamp_history_selection(ed)
 }
 
 editor_redo :: proc(ed: ^Editor) {
     if len(ed.redos) > 0 do display_invalidate_from(ed, 0)
     editor_apply_undo_items(&ed.redos, &ed.undos)
+    editor_clamp_history_selection(ed)
+}
+
+@(private="file")
+editor_clamp_history_selection :: proc(ed: ^Editor) {
+    for &pos in ed.state.selection do pos = clamp(pos, 0, len(ed.sb.buf))
 }
 
