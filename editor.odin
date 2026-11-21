@@ -4,7 +4,8 @@ import "core:strings"
 import "core:bytes"
 import "core:fmt"
 import "core:mem"
-import "core:slice"
+import "core:strconv"
+import "core:time"
 import te "core:text/edit"
 import rl "vendor:raylib"
 
@@ -24,6 +25,7 @@ Editor_Action :: enum {
 Editor_Key_Mod :: enum {
     CTRL,
     SHIFT,
+    ALT,
 }
 
 Editor_Key_Mod_State :: bit_set[Editor_Key_Mod]
@@ -60,11 +62,8 @@ Editor :: struct {
 
     pending_action: Editor_Action,
 
-    // TODO(Apaar): We could technically use a fixed backing array for this string builder
-    status: strings.Builder,
-
-    // TODO(Apaar): Perhaps this should be managed via a text/edit state too?
     command: strings.Builder,
+    command_cursor: int,
 
     // The name of the file currently being edited
     filename: strings.Builder,
@@ -126,113 +125,126 @@ editor_loc_to_byte_index :: proc(loc: Editor_Loc, buf: []byte) -> int {
     return byte_idx + min(loc.col, max_col)
 }
 
-editor_init :: proc(using ed: ^Editor) {
+editor_init :: proc(ed: ^Editor) {
     te.init(
-        &state,
+        &ed.state,
         context.allocator,
         context.allocator,
+        // Opal owns undo. Suppress text/edit's additional full-buffer snapshots.
+        undo_timeout = max(time.Duration),
     )
 
-    sb = strings.builder_make()
-    status = strings.builder_make()
-    command = strings.builder_make()
-    filename = strings.builder_make()
+    ed.sb = strings.builder_make()
+    ed.command = strings.builder_make()
+    ed.filename = strings.builder_make()
 }
 
-editor_clamp_cursor_to_buffer :: proc(using ed: ^Editor) {
-    state.selection[0] = clamp(state.selection[0], 0, len(sb.buf))
-    state.selection[1] = state.selection[0]
+editor_clamp_cursor_to_buffer :: proc(ed: ^Editor) {
+    ed.state.selection[0] = clamp(ed.state.selection[0], 0, len(ed.sb.buf))
+    ed.state.selection[1] = ed.state.selection[0]
 }
 
-editor_get_text :: proc(using ed: ^Editor) -> string {
-    return strings.to_string(sb)
+editor_get_text :: proc(ed: ^Editor) -> string {
+    return strings.to_string(ed.sb)
 }
 
-editor_set_status_to_string :: proc(using ed: ^Editor, str: string) {
-    strings.builder_reset(&status)
-    strings.write_string(&status, str)
+editor_set_filename :: proc(ed: ^Editor, str: string) {
+    strings.builder_reset(&ed.filename)
+    strings.write_string(&ed.filename, str)
 }
 
-editor_set_filename :: proc(using ed: ^Editor, str: string) {
-    strings.builder_reset(&filename)
-    strings.write_string(&filename, str)
+editor_destroy :: proc(ed: ^Editor) {
+    strings.builder_destroy(&ed.sb)
+    strings.builder_destroy(&ed.command)
+    strings.builder_destroy(&ed.filename)
+    delete(ed.display.checkpoints)
+
+    te.destroy(&ed.state)
 }
 
-editor_destroy :: proc(using ed: ^Editor) {
-    strings.builder_destroy(&sb)
-    strings.builder_destroy(&status)
-    strings.builder_destroy(&command)
-    strings.builder_destroy(&filename)
-
-    te.destroy(&state)
+editor_begin_frame :: proc(ed: ^Editor) {
+    te.begin(&ed.state, 0, &ed.sb)
+    ed.state.selection = ed.prev_frame_sel
 }
 
-editor_begin_frame :: proc(using ed: ^Editor) {
-    te.begin(&state, 0, &sb)
-    state.selection = prev_frame_sel
+editor_end_frame :: proc(ed: ^Editor) {
+    ed.prev_frame_sel = ed.state.selection
+    te.end(&ed.state)
+}
 
-    switch(mode) {
-        case .INSERT: {
-            editor_set_status_to_string(ed, "-- INSERT --")
-        }
+editor_update_state_indices :: proc(ed: ^Editor) {
+    buf := ed.sb.buf[:]
+    sel_pos := ed.state.selection[0]
+    line_start := bytes.last_index_byte(buf[:sel_pos], '\n') + 1
+    line_end := editor_find_line_end(buf, sel_pos)
+    col := sel_pos - line_start
 
-        case .NORMAL: {
-            editor_set_status_to_string(ed, "")
-        }
-
-        case .COMMAND: {
-            // HACK(Apaar): Not necessarily a good idea to hijack the status for this but ok
-            editor_set_status_to_string(ed, fmt.tprintf(":%s", strings.to_string(command)))
-        }
+    ed.state.line_start = line_start
+    ed.state.line_end = line_end
+    ed.state.up_index = min(col, line_end)
+    if line_start > 0 {
+        prev_end := line_start - 1
+        prev_start := bytes.last_index_byte(buf[:prev_end], '\n') + 1
+        ed.state.up_index = min(prev_start + col, prev_end)
     }
-}
-
-editor_end_frame :: proc(using ed: ^Editor) {
-    if prev_frame_sel != state.selection {
-        should_scroll_cursor_into_view = true
+    ed.state.down_index = len(buf)
+    if line_end < len(buf) {
+        next_start := line_end + 1
+        ed.state.down_index = min(next_start + col, editor_find_line_end(buf, next_start))
     }
-
-    prev_frame_sel = state.selection
-    te.end(&state)
-}
-
-editor_update_state_indices :: proc(using ed: ^Editor) {
-    sel_pos := state.selection[0]
-
-    state.line_end = bytes.index_byte(sb.buf[sel_pos:], '\n')
-    if state.line_end < 0 {
-        state.line_end = len(sb.buf)
-    } else {
-        state.line_end += sel_pos
-    }
-
-    loc := byte_index_to_editor_loc(sel_pos, sb.buf[:])
-    
-    state.line_start = editor_loc_to_byte_index({loc.row, 0}, sb.buf[:])
-    
-    state.up_index = editor_loc_to_byte_index({loc.row - 1, loc.col}, sb.buf[:])
-    state.down_index = editor_loc_to_byte_index({loc.row + 1, loc.col}, sb.buf[:])
 }
 
 @(private="file")
-next_empty_line_byte_index :: proc(using ed: ^Editor, delta: int) -> int {
-    sel_pos := state.selection[0]
+editor_find_line_end :: proc(buf: []byte, start: int) -> int {
+    end := bytes.index_byte(buf[start:], '\n')
+    return len(buf) if end < 0 else start + end
+}
 
-    loc := byte_index_to_editor_loc(sel_pos, sb.buf[:])
+@(private="file")
+editor_insert_text :: proc(ed: ^Editor, text: string) {
+    start, _ := te.sorted_selection(&ed.state)
+    display_invalidate_from(ed, start)
+    te.input_text(&ed.state, text)
+}
+
+@(private="file")
+editor_insert_rune :: proc(ed: ^Editor, ch: rune) {
+    start, _ := te.sorted_selection(&ed.state)
+    display_invalidate_from(ed, start)
+    te.input_rune(&ed.state, ch)
+}
+
+@(private="file")
+editor_delete_selection :: proc(ed: ^Editor) {
+    te.selection_delete(&ed.state)
+    display_invalidate_from(ed, ed.state.selection[0])
+}
+
+@(private="file")
+editor_delete_to :: proc(ed: ^Editor, translation: te.Translation) {
+    te.delete_to(&ed.state, translation)
+    display_invalidate_from(ed, ed.state.selection[0])
+}
+
+@(private="file")
+next_empty_line_byte_index :: proc(ed: ^Editor, delta: int) -> int {
+    sel_pos := ed.state.selection[0]
+
+    loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
     prev_pos := -1
 
     for {
         loc.row += delta
 
-        pos := editor_loc_to_byte_index({loc.row, 0}, sb.buf[:])
+        pos := editor_loc_to_byte_index({loc.row, 0}, ed.sb.buf[:])
 
         // No more places to go
-        if pos <= 0 || pos >= len(sb.buf) || pos == prev_pos {
+        if pos <= 0 || pos >= len(ed.sb.buf) || pos == prev_pos {
             return pos
         }
 
         // Skip runs of newlines
-        if prev_pos >= 0 && (sb.buf[prev_pos] == '\n' && sb.buf[pos] != '\n') {
+        if prev_pos >= 0 && (ed.sb.buf[prev_pos] == '\n' && ed.sb.buf[pos] != '\n') {
             return prev_pos
         }
 
@@ -252,9 +264,6 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
         case .L: t = .Right
         case .K: t = .Up
         case .J: t = .Down
-        case .B: t = .Word_Left
-        // TODO(Apaar): Handle going to the end of the word, end of next word, etc
-        case .W, .E: t = .Word_Right
         case .ZERO: t = .Soft_Line_Start
         case .FOUR: {
             valid = is_shift_pressed
@@ -267,31 +276,224 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
 }
 
 @(private="file")
-track_text_and_pos :: proc(using ed: ^Editor) {
-    editor_undo_track(ed, &sb.buf)
-    editor_undo_track(ed, mem.slice_to_bytes(state.selection[:]))
+track_text_and_pos :: proc(ed: ^Editor) {
+    editor_undo_track(ed, &ed.sb.buf)
+    editor_undo_track(ed, mem.slice_to_bytes(ed.state.selection[:]))
 }
 
-editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
+@(private="file")
+editor_continue_list :: proc(ed: ^Editor) -> bool {
+    // Keep selection replacement and mid-line splits as plain newlines.
+    if te.has_selection(&ed.state) || ed.state.selection[0] != ed.state.line_end {
+        return false
+    }
+
+    skip_space :: proc(line: []byte, start: int) -> int {
+        i := start
+        for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+            i += 1
+        }
+        return i
+    }
+
+    line := ed.sb.buf[ed.state.line_start:ed.state.line_end]
+    indent := skip_space(line, 0)
+    if indent == len(line) do return false
+
+    marker := line[indent]
+    bullet := marker == '-' || marker == '+' || marker == '*'
+    marker_end := indent + 1
+    number := 0
+    if !bullet {
+        i := indent
+        for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+            // Markdown allows at most nine digits in an ordered list marker.
+            if i - indent == 9 do return false
+            number = number * 10 + int(line[i] - '0')
+            i += 1
+        }
+        if i == indent || i == len(line) do return false
+
+        marker = line[i]
+        if marker != '.' && marker != ')' do return false
+        marker_end = i + 1
+    }
+
+    content := skip_space(line, marker_end)
+    if content == marker_end do return false
+
+    task := false
+    if bullet {
+        rest := line[content:]
+        if len(rest) >= 3 && rest[0] == '[' && rest[2] == ']' &&
+           (rest[1] == ' ' || rest[1] == 'x' || rest[1] == 'X') {
+            after_box := skip_space(line, content + 3)
+            if after_box == len(line) || after_box > content + 3 {
+                task = true
+                content = after_box
+            }
+        }
+
+        if !task {
+            // A spaced run of at least three matching markers is a thematic break.
+            i, count := content, 1
+            for i < len(line) && line[i] == marker {
+                i = skip_space(line, i + 1)
+                count += 1
+            }
+            if i == len(line) && count >= 3 do return false
+        }
+    }
+
+    if content == len(line) {
+        ed.state.selection = {ed.state.line_start, ed.state.line_end}
+        editor_delete_selection(ed)
+        return true
+    }
+
+    if !bullet && number == 999_999_999 do return false
+
+    digits: [9]byte
+    next_number := ""
+    if !bullet {
+        next_number = strconv.write_int(digits[:], i64(number + 1), 10)
+    }
+
+    suffix := " "
+    if task do suffix = " [ ] "
+
+    // Copy out of the editor buffer before inserting: the insert can move it.
+    local: [64]byte
+    prefix_len := 1 + indent + len(next_number) + 1 + len(suffix)
+    prefix := local[:]
+    if prefix_len > len(local) {
+        prefix = make([]byte, prefix_len)
+    }
+    defer if prefix_len > len(local) do delete(prefix)
+    prefix[0] = '\n'
+    copy(prefix[1:], line[:indent])
+    pos := 1 + indent
+    pos += copy(prefix[pos:], next_number)
+    prefix[pos] = marker
+    copy(prefix[pos + 1:], suffix)
+    editor_insert_text(ed, string(prefix[:prefix_len]))
+    return true
+}
+
+Editor_Text_Key :: struct {
+    translation: te.Translation,
+    deletes: bool,
+}
+
+editor_text_letter_shortcut :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State) -> (Editor_Text_Key, bool) {
+    if .CTRL in mods && .ALT not_in mods {
+        #partial switch key {
+            case .W: return {.Word_Left, true}, true
+            case .A: return {.Soft_Line_Start, false}, true
+            case .E: return {.Soft_Line_End, false}, true
+        }
+    }
+    if .ALT in mods && .CTRL not_in mods {
+        #partial switch key {
+            case .B: return {.Word_Left, false}, true
+            case .F: return {.Word_Right, false}, true
+        }
+    }
+    return {}, false
+}
+
+@(private="file")
+editor_text_key :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State) -> (Editor_Text_Key, bool) {
+    word := .ALT in mods || .CTRL in mods
+    #partial switch key {
+        case .LEFT: return {word ? .Word_Left : .Left, false}, true
+        case .RIGHT: return {word ? .Word_Right : .Right, false}, true
+        case .BACKSPACE: return {word ? .Word_Left : .Left, true}, true
+        case .DELETE: return {word ? .Word_Right : .Right, true}, true
+        case .HOME: return {.Soft_Line_Start, false}, true
+        case .END: return {.Soft_Line_End, false}, true
+    }
+    return editor_text_letter_shortcut(key, mods)
+}
+
+@(private="file")
+editor_handle_insert_text_key :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State, action: Editor_Text_Key) {
+    translation := action.translation
+    has_selection := te.has_selection(&ed.state)
+    if action.deletes && has_selection {
+        editor_delete_selection(ed)
+        return
+    }
+    if translation == .Word_Left || translation == .Word_Right {
+        if key == .BACKSPACE && .CTRL in mods {
+            editor_delete_to(ed, .Word_Left)
+            return
+        }
+        buf := ed.sb.buf[:]
+        pos := word_caret_start(buf, ed.state.selection[0])
+        target := word_edit_target(buf, pos, translation == .Word_Left)
+        if action.deletes && target != pos {
+            ed.state.selection = {target, pos}
+            editor_delete_selection(ed)
+        } else {
+            ed.state.selection = {target, target}
+        }
+    } else if action.deletes {
+        pos := ed.state.selection[0]
+        if key == .BACKSPACE && pos >= 4 && string(ed.sb.buf[pos - 4:pos]) == "    " {
+            ed.state.selection = {pos - 4, pos}
+            editor_delete_selection(ed)
+        } else {
+            editor_delete_to(ed, translation)
+        }
+    } else {
+        te.move_to(&ed.state, translation)
+    }
+}
+
+@(private="file")
+editor_handle_command_text_key :: proc(ed: ^Editor, action: Editor_Text_Key) {
+    buf := ed.command.buf[:]
+    cursor := ed.command_cursor
+    target := cursor
+    #partial switch action.translation {
+        case .Word_Left, .Word_Right:
+            target = word_edit_target(buf, cursor, action.translation == .Word_Left)
+        case .Left: target = max(0, cursor - 1)
+        case .Right: target = min(len(buf), cursor + 1)
+        case .Soft_Line_Start: target = 0
+        case .Soft_Line_End: target = len(buf)
+    }
+    if action.deletes && target != cursor {
+        low, high := min(cursor, target), max(cursor, target)
+        copy(buf[low:], buf[high:])
+        resize(&ed.command.buf, len(buf) - (high - low))
+        target = low
+    }
+    ed.command_cursor = target
+}
+
+editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
     if key == .LEFT_SHIFT || key == .RIGHT_SHIFT || key == .LEFT_CONTROL || key == .RIGHT_CONTROL {
         // This should do nothing
         return
     }
+    if key == .LEFT_ALT || key == .RIGHT_ALT do return
 
     editor_update_state_indices(ed)
 
-    outer_switch: switch mode {
+    outer_switch: switch ed.mode {
         case .NORMAL: {
-            switch pending_action {
+            switch ed.pending_action {
                 case .GO: {
                     track_text_and_pos(ed)
                     defer editor_undo_commit(ed)
 
                     if key == .G {
-                        te.move_to(&state, .Start)
+                        te.move_to(&ed.state, .Start)
                     }
 
-                    pending_action = .NONE
+                    ed.pending_action = .NONE
                     break outer_switch
                 }
 
@@ -299,13 +501,23 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                     track_text_and_pos(ed)
                     defer editor_undo_commit(ed)
 
-                    pending_action = .NONE
+                    ed.pending_action = .NONE
 
                     if key == .D {
                         // Delete the line
-                        te.move_to(&state, .Soft_Line_End)
-                        te.delete_to(&state, .Soft_Line_Start)
-                        te.delete_to(&state, .Left)
+                        te.move_to(&ed.state, .Soft_Line_End)
+                        editor_delete_to(ed, .Soft_Line_Start)
+                        editor_delete_to(ed, .Left)
+                        break outer_switch
+                    }
+
+                    if motion, ok := key_to_word_motion(key); ok {
+                        if !te.has_selection(&ed.state) {
+                            ed.state.selection = word_delete_range(ed.sb.buf[:], ed.state.selection[0], motion, .SHIFT in mods)
+                        }
+                        if te.has_selection(&ed.state) {
+                            editor_delete_selection(ed)
+                        }
                         break outer_switch
                     }
 
@@ -315,13 +527,13 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                         break outer_switch
                     }
 
-                    te.delete_to(&state, translation)
+                    editor_delete_to(ed, translation)
                     break outer_switch
                 }
 
                 case .REPLACE: {
                     // Whatever key was pressed should've been handled as a charpress
-                    pending_action = .NONE
+                    ed.pending_action = .NONE
                     break outer_switch
                 }
 
@@ -329,17 +541,17 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
             }
 
             if key == .LEFT_BRACKET && .SHIFT in mods {
-                state.selection[0] = next_empty_line_byte_index(ed, -1)
+                ed.state.selection[0] = next_empty_line_byte_index(ed, -1)
             }
 
             if key == .RIGHT_BRACKET && .SHIFT in mods {
-                state.selection[0] = next_empty_line_byte_index(ed, 1)
+                ed.state.selection[0] = next_empty_line_byte_index(ed, 1)
             }
 
             if key == .R {
                 track_text_and_pos(ed)
                 
-                pending_action = .REPLACE
+                ed.pending_action = .REPLACE
 
                 break
             }
@@ -348,11 +560,11 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                 if .SHIFT in mods {
                     track_text_and_pos(ed)
 
-                    te.move_to(&state, .End)
+                    te.move_to(&ed.state, .End)
 
                     editor_undo_commit(ed)
                 } else {
-                    pending_action = .GO
+                    ed.pending_action = .GO
                 }
 
                 break
@@ -367,120 +579,113 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
             }
 
             if key == .X {
-                editor_undo_track(ed, &sb.buf)
+                editor_undo_track(ed, &ed.sb.buf)
                 defer editor_undo_commit(ed)
 
-                te.delete_to(&state, .Right)
+                editor_delete_to(ed, .Right)
             }
 
             if key == .I {
                 if .SHIFT in mods {
-                    te.move_to(&state, .Soft_Line_Start)
+                    te.move_to(&ed.state, .Soft_Line_Start)
                 }
 
-                mode = .INSERT
+                ed.mode = .INSERT
 
                 // Start tracking now and don't commit until we exit insert mode
                 track_text_and_pos(ed)
             }
 
             if key == .SEMICOLON && .SHIFT in mods {
-                mode = .COMMAND
+                ed.mode = .COMMAND
             }
 
             if key == .A {
                 track_text_and_pos(ed)
 
                 if .SHIFT in mods {
-                    te.move_to(&state, .Soft_Line_End)
+                    te.move_to(&ed.state, .Soft_Line_End)
                 } else {
-                    te.move_to(&state, .Right)
+                    te.move_to(&ed.state, .Right)
                 }
 
-                mode = .INSERT
+                ed.mode = .INSERT
             }
 
             if key == .O {
                 track_text_and_pos(ed)
 
                 if .SHIFT in mods {
-                    te.move_to(&state, .Soft_Line_Start)
-                    te.input_text(&state, "\n")
-                    te.move_to(&state, .Left)
+                    te.move_to(&ed.state, .Soft_Line_Start)
+                    editor_insert_text(ed, "\n")
+                    te.move_to(&ed.state, .Left)
                 } else {
-                    te.move_to(&state, .End)
-                    te.input_text(&state, "\n")
-
-                    editor_update_state_indices(ed)
-
-                    te.move_to(&state, .Down)
+                    te.move_to(&ed.state, .Soft_Line_End)
+                    editor_insert_text(ed, "\n")
                 }
 
-                mode = .INSERT
+                ed.mode = .INSERT
             }
 
             if key == .D {
-                pending_action = .DELETE
+                ed.pending_action = .DELETE
+                break
+            }
+
+            if motion, ok := key_to_word_motion(key); ok {
+                pos := word_motion_target(ed.sb.buf[:], ed.state.selection[0], motion, .SHIFT in mods)
+                ed.state.selection = {pos, pos}
                 break
             }
 
             translation, valid := key_to_translation(key, .SHIFT in mods)
 
             if valid {
-                te.move_to(&state, translation)
+                te.move_to(&ed.state, translation)
             }
         }
         
         case .INSERT: {
             if key == .ESCAPE {
                 editor_undo_commit(ed)
-                mode = .NORMAL
+                ed.mode = .NORMAL
             }
 
             if key == .LEFT_BRACKET && .CTRL in mods {
                 editor_undo_commit(ed)
-                mode = .NORMAL
+                ed.mode = .NORMAL
             }
 
-            if key == .BACKSPACE {
-                sel_pos := state.selection[0]
-
-                is_at_soft_tab := 
-                    (sel_pos - 4) >= 0 && 
-                    string(sb.buf[sel_pos - 4:sel_pos]) == "    "
-
-                if .CTRL in mods {
-                    te.delete_to(&state, .Word_Left)
-                } else if !is_at_soft_tab {
-                    te.delete_to(&state, .Left)
-                } else {
-                    state.selection[0] -= 4
-                    te.selection_delete(&state)
-                }
+            if action, ok := editor_text_key(key, mods); ok {
+                editor_handle_insert_text_key(ed, key, mods, action)
+                break
             }
+            if key == .UP do te.move_to(&ed.state, .Up)
+            if key == .DOWN do te.move_to(&ed.state, .Down)
 
-            if key == .ENTER {
-                te.input_text(&state, "\n")
+            if key == .ENTER && (mods != {} || !editor_continue_list(ed)) {
+                editor_insert_text(ed, "\n")
             }
             
             if key == .TAB {
-                te.input_text(&state, "    ")
+                editor_insert_text(ed, "    ")
             }
         }
 
         case .COMMAND: {
-            if key == .BACKSPACE {
-                // TODO(Apaar): Handle ctrl + backspace
-                strings.pop_rune(&command)
+            if action, ok := editor_text_key(key, mods); ok {
+                editor_handle_command_text_key(ed, action)
+                break
             }
 
             if key == .ESCAPE {
-                strings.builder_reset(&command)
-                mode = .NORMAL
+                strings.builder_reset(&ed.command)
+                ed.command_cursor = 0
+                ed.mode = .NORMAL
             }
 
             if key == .ENTER {
-                src := strings.to_string(command)
+                src := strings.to_string(ed.command)
                 cmd, ok := command_parse(&src)
 
                 if ok {
@@ -490,8 +695,9 @@ editor_handle_keypress :: proc(using ed: ^Editor, key: rl.KeyboardKey, mods: Edi
                     fmt.println("Command failed")
                 }
 
-                strings.builder_reset(&command)
-                mode = .NORMAL
+                strings.builder_reset(&ed.command)
+                ed.command_cursor = 0
+                ed.mode = .NORMAL
             }
         }
     }
@@ -502,13 +708,13 @@ is_ascii :: proc(ch: rune) -> bool {
     return ch >= 32 && ch <= 125
 }
 
-editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
-    switch mode {
+editor_handle_charpress :: proc(ed: ^Editor, ch: rune) {
+    switch ed.mode {
         case .NORMAL: {
-            if pending_action == .REPLACE {
-                te.delete_to(&state, .Right)
-                te.input_rune(&state, ch)
-                te.move_to(&state, .Left)
+            if ed.pending_action == .REPLACE {
+                editor_delete_to(ed, .Right)
+                editor_insert_rune(ed, ch)
+                te.move_to(&ed.state, .Left)
 
                 editor_undo_commit(ed)
 
@@ -525,7 +731,7 @@ editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
                 break
             }
 
-            te.input_rune(&state, ch)
+            editor_insert_rune(ed, ch)
         }
         
         case .COMMAND: {
@@ -533,7 +739,9 @@ editor_handle_charpress :: proc(using ed: ^Editor, ch: rune) {
                 break
             }
 
-            strings.write_rune(&command, ch)
+            if ok, _ := inject_at(&ed.command.buf, ed.command_cursor, byte(ch)); ok {
+                ed.command_cursor += 1
+            }
         }
     }
 }

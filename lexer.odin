@@ -68,7 +68,7 @@ lexer_token_string :: proc(token: Lexer_Token) -> string {
     return ""
 }
 
-lexer_next_token :: proc(using lex: ^Lexer) -> (token: Lexer_Token, ok: bool) #optional_ok {
+lexer_next_token :: proc(lex: ^Lexer) -> (token: Lexer_Token, ok: bool) #optional_ok {
     state: enum {
         NONE, 
         NEWLINE, 
@@ -80,11 +80,11 @@ lexer_next_token :: proc(using lex: ^Lexer) -> (token: Lexer_Token, ok: bool) #o
         WORD,
     }
 
-    start := pos
+    start := lex.pos
     count := 0
 
     reader: strings.Reader
-    strings.reader_init(&reader, src)
+    strings.reader_init(&reader, lex.src)
 
     loop: for ch, size in read_rune_iterator(&reader) {
         switch state {
@@ -144,22 +144,22 @@ lexer_next_token :: proc(using lex: ^Lexer) -> (token: Lexer_Token, ok: bool) #o
 
     extents := [2]int{start, start + count}
 
-    pos += count
+    lex.pos += count
 
     sub: Lexer_Token_Sub
 
     switch state {
-        case .NEWLINE: sub = Lexer_Token_Newline(src[:count])
-        case .SPACE: sub = Lexer_Token_Spaces(src[:count])
-        case .BACKTICK: sub = Lexer_Token_Backtick(src[:count])
-        case .WORD: sub = Lexer_Token_Word(src[:count])
-        case .MINUS: sub = Lexer_Token_Minus(src[:count])
-        case .LEFT_BRACKET: sub = Lexer_Token_Left_Bracket(src[:count])
-        case .RIGHT_BRACKET: sub = Lexer_Token_Right_Bracket(src[:count])
+        case .NEWLINE: sub = Lexer_Token_Newline(lex.src[:count])
+        case .SPACE: sub = Lexer_Token_Spaces(lex.src[:count])
+        case .BACKTICK: sub = Lexer_Token_Backtick(lex.src[:count])
+        case .WORD: sub = Lexer_Token_Word(lex.src[:count])
+        case .MINUS: sub = Lexer_Token_Minus(lex.src[:count])
+        case .LEFT_BRACKET: sub = Lexer_Token_Left_Bracket(lex.src[:count])
+        case .RIGHT_BRACKET: sub = Lexer_Token_Right_Bracket(lex.src[:count])
         case .NONE: return
     }
 
-    src = src[count:]
+    lex.src = lex.src[count:]
 
     return {extents, sub}, true
 }

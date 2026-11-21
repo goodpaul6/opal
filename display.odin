@@ -1,6 +1,7 @@
 package main
 
 import "core:strings"
+import "core:time"
 import rl "vendor:raylib"
 
 INSERT_CARET_W :: 2
@@ -8,165 +9,165 @@ INSERT_CARET_W :: 2
 Editor_Display_State :: struct {
     bounds: rl.Rectangle,
     scroll_pos: [2]f32,
-    prev_caret_rect: rl.Rectangle,
+    checkpoints: [dynamic]Display_Checkpoint,
+    checkpoint_width: f32,
+    checkpoint_zoom: int,
+}
+
+STATUS_PAD_X :: 8
+STATUS_PAD_Y :: 6
+
+Editor_Status_Layout :: struct {
+    label, command_tail: string,
+    badge_width, prompt_x, command_x, caret_x: f32,
+}
+
+// Read mode and command at draw time; the visible text borrows the editor buffer.
+editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^Font_Metrics = nil) -> (layout: Editor_Status_Layout) {
+    switch ed.mode {
+        case .NORMAL: layout.label = "NORMAL"
+        case .INSERT: layout.label = "INSERT"
+        case .COMMAND: layout.label = "COMMAND"
+    }
+    layout.badge_width = display_text_width(font, layout.label, metrics) + 2 * STATUS_PAD_X
+    if ed.mode != .COMMAND do return
+
+    colon_width := display_glyph_advance(font, ':', metrics)
+    layout.prompt_x = layout.badge_width + STATUS_PAD_X
+    right := width - STATUS_PAD_X
+    if layout.prompt_x + colon_width + INSERT_CARET_W > right {
+        // In tiny windows prefer showing the prompt and caret to the badge.
+        layout.badge_width = 0
+        right = width
+        layout.prompt_x = clamp(width - colon_width - INSERT_CARET_W, 0, STATUS_PAD_X)
+    }
+    layout.command_x = layout.prompt_x + colon_width
+
+    // Command input is ASCII. Keep the caret visible and measure only as
+    // much text on either side of it as fits.
+    command := strings.to_string(ed.command)
+    cursor := ed.command_cursor
+    start := cursor
+    tail_width: f32
+    available := right - layout.command_x - INSERT_CARET_W
+    for start > 0 {
+        ch := rune(command[start - 1])
+        advance := display_glyph_advance(font, ch, metrics)
+        if start < cursor do advance += font_pair_delta(metrics, ch, rune(command[start]))
+        // The prompt stays visible, so it pairs with the first visible byte,
+        // not with any of the hidden prefix.
+        first_delta := font_pair_delta(metrics, ':', ch)
+        if tail_width + advance + first_delta > available do break
+        tail_width += advance
+        start -= 1
+    }
+    // Use the same forward pen as drawing, including the prompt pair.
+    pen := Display_Pen{layout.command_x, ':'}
+    for ch in command[start:cursor] do display_pen_step(&pen, font, metrics, ch)
+    layout.caret_x = pen.x
+    end := cursor
+    for end < len(command) {
+        display_pen_step(&pen, font, metrics, rune(command[end]))
+        if pen.x > right do break
+        end += 1
+    }
+    layout.command_tail = command[start:end]
+    return
 }
 
 @(private="file")
-draw_line :: proc(
-    using ed: ^Editor, 
-    theme: ^Theme, 
-    line: string, 
-    pos: [2]f32, 
-    caret_pos: int, 
-    fixed_caret_w: f32, 
-    chop_caret: bool
-) {
-    font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
+editor_status_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32) {
+    font := &theme.fonts[.BODY]
+    bar_h := min(f32(height), editor_status_line_height(theme))
+    if width <= 0 || bar_h <= 0 do return
+    bar := rl.Rectangle{0, f32(height) - bar_h, f32(width), bar_h}
+    text_y := bar.y + max(0, (bar_h - f32(font.baseSize)) / 2)
+    fg, bg := theme.data.fg_color, theme.data.bg_color
+    layout := editor_status_layout(ed, font, bar.width, &theme.font_metrics[.BODY])
 
-    text := strings.clone_to_cstring(line, context.temp_allocator)
-
-    rl.DrawTextEx(
-        font=font,
-        text=text,
-        position=pos,
-        fontSize=font_size,
-        spacing=0,
-        tint=theme.data.fg_color,
-    )
-
-    if caret_pos < 0 {
-        return
+    display_begin_scissor(theme, bar, height)
+    defer rl.EndScissorMode()
+    rl.DrawRectangleRec(display_snap_rect(theme, bar), rl.ColorLerp(bg, fg, 0.125))
+    if layout.badge_width > 0 {
+        rl.DrawRectangleRec(display_snap_rect(theme, {0, bar.y, layout.badge_width, bar_h}), fg)
+        display_draw_text(theme, font, layout.label, {STATUS_PAD_X, text_y}, bg)
     }
-
-    // Draw caret
-    sub_len := caret_pos
-
-    sub_text := strings.clone_to_cstring(line[:sub_len], context.temp_allocator)
-
-    // HACK(Apaar): We subtract the size of e.g. "abc" from "ab" to get the caret size over "c"
-    sub_text_plus_current := sub_len < len(line) ? strings.clone_to_cstring(line[:sub_len+1], context.temp_allocator) : sub_text
-
-    // Place the caret right after this
-    sub_text_size := rl.MeasureTextEx(font, sub_text, fontSize=font_size, spacing=0)
-    sub_text_plus_current_size := rl.MeasureTextEx(font, sub_text_plus_current, fontSize=font_size, spacing=0)
-
-    calc_caret_w := sub_text_plus_current_size.x - sub_text_size.x
-
-    if calc_caret_w == 0 {
-        calc_caret_w = 5
+    if ed.mode == .COMMAND {
+        display_draw_text(theme, font, ":", {layout.prompt_x, text_y}, fg)
+        display_draw_text(theme, font, layout.command_tail, {layout.command_x, text_y}, fg, ':')
+        rl.DrawRectangleRec(
+            display_snap_rect(theme, {layout.caret_x, text_y, INSERT_CARET_W, f32(font.baseSize)}),
+            fg,
+        )
     }
-
-    rl.DrawRectangleRec(
-        rl.Rectangle{
-            x = pos.x + sub_text_size.x,
-            y = pos.y + (chop_caret ? sub_text_size.y / 2 : 0),
-            width = fixed_caret_w > 0 ? fixed_caret_w : calc_caret_w,
-            height = chop_caret ? sub_text_size.y / 2 : sub_text_size.y,
-        },
-        theme.data.fg_color,
-    )
-}
-
-to_cstring :: proc(builder: ^strings.Builder) -> cstring {
-    strings.write_byte(builder, 0)
-    strings.pop_byte(builder)
-    return cstring(raw_data(builder.buf))
 }
 
 // Sets up display state that will use used throughout display calls
 editor_display_begin :: proc(
-    using ed: ^Editor, 
+    ed: ^Editor,
     theme: ^Theme, 
     bounds: rl.Rectangle,
 ) {
-    display.bounds = bounds
+    if ed.display.bounds != bounds || ed.display.checkpoint_zoom != theme.zoom_level {
+        ed.should_scroll_cursor_into_view = true
+    }
+    ed.display.bounds = bounds
 }
 
 // Cleans up display state
-editor_display_end :: proc(using ed: ^Editor) {
+editor_display_end :: proc(ed: ^Editor) {
     // TODO(Apaar): Maybe clean up wrapped_lines?
 }
 
-editor_status_line_height :: proc(theme: ^Theme) -> f32{
-    return f32(theme.fonts[.BODY].baseSize)
+editor_status_line_height :: proc(theme: ^Theme) -> f32 {
+    return f32(theme.fonts[.BODY].baseSize) + 2 * STATUS_PAD_Y
 }
 
-editor_display_draw :: proc(using ed: ^Editor, theme: ^Theme) {
-    font := theme.fonts[.BODY]
-    font_size := f32(font.baseSize)
+editor_display_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32, trace: ^Input_Frame_Trace = nil) {
+    tick: time.Tick
+    bounds_size := [2]f32{ed.display.bounds.width, ed.display.bounds.height}
+    if bounds_size.x > 0 && bounds_size.y > 0 {
+        if ed.should_scroll_cursor_into_view || ed.prev_frame_sel != ed.state.selection {
+            when OPAL_TRACE_INPUT {
+                if trace != nil do tick = time.tick_now()
+            }
+            caret := display_command_gen(ed, theme, bounds_size, viewport_top = ed.display.scroll_pos.y)
+            top, bottom := caret.y, caret.y + caret.height
+            if top < ed.display.scroll_pos.y {
+                ed.display.scroll_pos.y = top
+            } else if bottom > ed.display.scroll_pos.y + bounds_size.y {
+                // A tiny window can't show the full caret; keep its top visible.
+                ed.display.scroll_pos.y = min(top, bottom - bounds_size.y)
+            }
+            ed.should_scroll_cursor_into_view = false
+            when OPAL_TRACE_INPUT {
+                if trace != nil do trace.caret = time.tick_since(tick)
+            }
+        }
 
-    blink := int(rl.GetTime() * 1000 / 300) % 2 == 0
-
-    commands := make([dynamic]Display_Command, context.temp_allocator)
-
-    _, caret_rect := display_command_gen(
-        ed, 
-        theme, 
-        {display.bounds.width, display.bounds.height}, 
-        &commands,
-    )
-
-    if should_scroll_cursor_into_view {
-        top := caret_rect.y
-        bottom := caret_rect.y + caret_rect.height
-
-        // TODO(Apaar): Handle horiz scroll
-        if (top - display.scroll_pos.y) < 0 {
-            display.scroll_pos.y = top
-        } else if (bottom - display.scroll_pos.y) > display.bounds.height {
-            display.scroll_pos.y = bottom - display.bounds.height
-        } else {
-            // In bounds, don't need to scroll anymore
-            should_scroll_cursor_into_view = false
+        when OPAL_TRACE_INPUT {
+            if trace != nil do tick = time.tick_now()
+        }
+        display_begin_scissor(theme, ed.display.bounds, height)
+        viewport := Display_Viewport{
+            theme = theme,
+            origin = [2]f32{ed.display.bounds.x, ed.display.bounds.y} - ed.display.scroll_pos,
+            top = ed.display.bounds.y,
+            bottom = ed.display.bounds.y + bounds_size.y,
+        }
+        display_command_gen(ed, theme, bounds_size, display_command_draw, &viewport,
+                            viewport.bottom - viewport.origin.y, ed.display.scroll_pos.y)
+        rl.EndScissorMode()
+        when OPAL_TRACE_INPUT {
+            if trace != nil do trace.page = time.tick_since(tick)
         }
     }
 
-    {
-        rl.BeginScissorMode(
-            i32(display.bounds.x), 
-            i32(display.bounds.y),
-            i32(display.bounds.width),
-            i32(display.bounds.height),
-        )
-        defer rl.EndScissorMode()
-
-        display_command_run_all(
-            commands[:], 
-            {display.bounds.x, display.bounds.y}, 
-            display.scroll_pos,
-        )
+    when OPAL_TRACE_INPUT {
+        if trace != nil do tick = time.tick_now()
     }
-
-    {
-        // Draw status bar
-
-        ren_size := [?]f32{
-            f32(rl.GetRenderWidth()), 
-            f32(rl.GetRenderHeight()),
-        }
-
-        rl.DrawRectangleRec(
-            {
-                x = 0,
-                y = ren_size.y - font_size,
-                width = ren_size.x,
-                height = font_size
-            }, 
-            theme.data.bg_color
-        )
-
-        // Only draw caret if in command mode
-        caret_pos := mode == .COMMAND ? len(status.buf) : -1
-
-        draw_line(
-            ed, 
-            theme, 
-            strings.to_string(status), 
-            {0, ren_size.y - font_size}, 
-            caret_pos, 
-            fixed_caret_w=INSERT_CARET_W, 
-            chop_caret=false
-        )
+    editor_status_draw(ed, theme, width, height)
+    when OPAL_TRACE_INPUT {
+        if trace != nil do trace.status = time.tick_since(tick)
     }
 }

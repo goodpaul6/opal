@@ -2,22 +2,22 @@ package main
 
 import "core:slice"
 
-editor_undo_track :: proc(using ed: ^Editor, data: $T) {
-    append(&undo_trackers, Editor_Undo_Tracker{
+editor_undo_track :: proc(ed: ^Editor, data: $T) {
+    append(&ed.undo_trackers, Editor_Undo_Tracker{
         orig_data = slice.clone(data[:]),
         data = data,
     })
 }
 
-editor_undo_commit :: proc(using ed: ^Editor) {
-    for &item in redos {
+editor_undo_commit :: proc(ed: ^Editor) {
+    for &item in ed.redos {
         delete(item.data)
     }
-    clear(&redos)
+    clear(&ed.redos)
 
     placed_nil := false
 
-    for tracker in undo_trackers {
+    for tracker in ed.undo_trackers {
         is_equal := false
 
         switch v in tracker.data {
@@ -32,7 +32,7 @@ editor_undo_commit :: proc(using ed: ^Editor) {
 
         if !placed_nil {
             // Add nil undo item to delimit changes
-            append(&undos, Editor_Undo_Item{})
+            append(&ed.undos, Editor_Undo_Item{})
             placed_nil = true
         }
 
@@ -41,14 +41,13 @@ editor_undo_commit :: proc(using ed: ^Editor) {
             dest = tracker.data,
         }
 
-        append(&undos, item)
+        append(&ed.undos, item)
     }
 
-    clear(&undo_trackers)
+    clear(&ed.undo_trackers)
 }
 
 editor_apply_undo_items :: proc(
-    using ed: ^Editor, 
     // If this is 'undos', 'reverse_items' is 'redos' and vice versa
     items: ^[dynamic]Editor_Undo_Item, 
     reverse_items: ^[dynamic]Editor_Undo_Item
@@ -100,11 +99,13 @@ editor_apply_undo_items :: proc(
     }
 }
 
-editor_undo :: proc(using ed: ^Editor) {
-    editor_apply_undo_items(ed, &undos, &redos)
+editor_undo :: proc(ed: ^Editor) {
+    if len(ed.undos) > 0 do display_invalidate_from(ed, 0)
+    editor_apply_undo_items(&ed.undos, &ed.redos)
 }
 
-editor_redo :: proc(using ed: ^Editor) {
-    editor_apply_undo_items(ed, &redos, &undos)
+editor_redo :: proc(ed: ^Editor) {
+    if len(ed.redos) > 0 do display_invalidate_from(ed, 0)
+    editor_apply_undo_items(&ed.redos, &ed.undos)
 }
 

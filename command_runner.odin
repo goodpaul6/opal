@@ -13,11 +13,13 @@ command_run :: proc(cmd: ^Command, ed: ^Editor) -> bool {
         case Command_Edit: {
             assert(c.filename != "")
 
-            data := os.read_entire_file(c.filename, context.temp_allocator) or_return
+            data, err := os.read_entire_file(c.filename, context.temp_allocator)
+            if err != nil do return false
 
             // Fix up line endings
             text := string(data)
 
+            display_invalidate_from(ed, 0)
             strings.builder_reset(&ed.sb)
 
             for line in strings.split_lines_iterator(&text) {
@@ -49,7 +51,7 @@ command_run :: proc(cmd: ^Command, ed: ^Editor) -> bool {
 
             fmt.println("Writing to file", filename)
 
-            os.write_entire_file(filename, transmute([]u8)s) or_return
+            if os.write_entire_file(filename, s) != nil do return false
             editor_set_filename(ed, filename)
 
             if c.quit {

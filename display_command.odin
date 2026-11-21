@@ -1,7 +1,9 @@
 package main
 
-import "core:strings"
-import "core:fmt"
+import "core:math"
+import "core:unicode"
+import "core:unicode/utf8"
+import rlgl "vendor:raylib/rlgl"
 import rl "vendor:raylib"
 
 Display_Command_Text :: struct {
@@ -13,200 +15,528 @@ Display_Command_Text :: struct {
 Display_Command_Rect :: struct {
     w, h: f32,
     color: rl.Color,
+    floor_left: bool, // Keep a glyph's quantized left edge inside the block caret.
+}
+
+Display_Dash_Context :: struct {
+    source: string,
+    start: int, // Byte offset of this draw chunk in the source.
 }
 
 Display_Command :: struct {
     pos: [2]f32,
+    previous: rune, // Carry same-font pair context into a separately emitted text chunk.
+    dash_context: Display_Dash_Context,
     sub: union #no_nil {
         Display_Command_Text,
         Display_Command_Rect,
     }
 }
 
-// HACK(Apaar): I return the caret rectangle from this for smoothly scrolling
-// the cursor into the bounds
+// Advance in logical pixels; only final rendering snaps to the framebuffer.
+Display_Pen :: struct {
+    x: f32,
+    previous: rune,
+}
+
+display_glyph_advance :: proc(font: ^rl.Font, ch: rune, metrics: ^Font_Metrics = nil) -> f32 {
+    index := rl.GetGlyphIndex(font^, ch == '	' ? ' ' : ch)
+    if metrics != nil && len(metrics.advances) != 0 do return metrics.advances[index]
+    return font_atlas_advance(font, index)
+}
+
+display_pen_step :: proc(pen: ^Display_Pen, font: ^rl.Font, metrics: ^Font_Metrics, ch: rune) -> f32 {
+    x := pen.x + font_pair_delta(metrics, pen.previous, ch)
+    pen.x = x + display_glyph_advance(font, ch, metrics)
+    pen.previous = ch
+    return x
+}
+
+display_text_width :: proc(font: ^rl.Font, text: string, metrics: ^Font_Metrics = nil) -> f32 {
+    pen: Display_Pen
+    for ch in text do display_pen_step(&pen, font, metrics, ch)
+    return pen.x
+}
+
+@(private="file")
+display_font_variant :: proc(theme: ^Theme, font: ^rl.Font) -> (variant: Theme_Font_Variant, ok: bool) {
+    for v in Theme_Font_Variant {
+        if font == &theme.fonts[v] do return v, true
+    }
+    return
+}
+
+@(private="file")
+display_raster_font :: proc(theme: ^Theme, font: ^rl.Font) -> ^rl.Font {
+    if variant, ok := display_font_variant(theme, font); ok && theme.native_fonts[variant].texture.id != 0 {
+        return &theme.native_fonts[variant]
+    }
+    return font
+}
+
+// At default body zoom Quartz uses the lower half-pixel bin at 1x and
+// the lower whole-pixel bin at 2x. Only use this for complete native masks.
+@(private="file")
+display_glyph_placement :: proc(theme: ^Theme, font, raster: ^rl.Font, index: i32) -> (floor_x: bool, half_rows: i32) {
+    when ODIN_OS == .Darwin {
+        if font != &theme.fonts[.BODY] || index < 0 || index >= FONT_RASTER_PHASE_LIMIT do return
+        if theme.pixel_scale == {1, 1} && raster == font {
+            p := &theme.body_placement
+            if p.half_rows > 0 && p.native[index] do return true, p.half_rows
+        } else if theme.pixel_scale == {2, 2} && raster == &theme.native_fonts[.BODY] {
+            return theme.native_body_placement.native[index], 0
+        }
+    }
+    return
+}
+
+// Quantize only after the viewport offset is included. The fractional part
+// selects a baked mask; destination coordinates remain device-pixel aligned.
+display_glyph_phase :: proc(device_x: f32, half_rows: i32) -> (x: f32, rows: i32) {
+    x = math.floor(device_x)
+    if device_x - x >= 0.5 do rows = half_rows
+    return
+}
+
+// Handle the spaced form of Inter's case alternate without a shaping call
+// during drawing. Only look across up to two spaces, not other punctuation.
+display_em_dash_in_case_context :: proc(before, after: string) -> bool {
+    is_space :: proc(ch: rune) -> bool { return ch == ' ' || ch == '\t' || ch == 0xa0 }
+    is_boundary :: proc(ch: rune) -> bool { return ch == 0 || ch == '\n' || is_space(ch) }
+    is_cap :: proc(ch: rune) -> bool { return (ch <= 0xff && unicode.is_upper(ch)) || ('0' <= ch && ch <= '9') }
+
+    left, l := utf8.decode_last_rune(before)
+    right, r := utf8.decode_rune(after)
+    if (len(before) != 0 && !is_boundary(left)) || (len(after) != 0 && !is_boundary(right)) do return false
+    prefix, suffix := before, after
+    for _ in 0..<2 {
+        if is_space(left) {
+            prefix = prefix[:len(prefix) - l]
+            left, l = utf8.decode_last_rune(prefix)
+        }
+        if is_space(right) {
+            suffix = suffix[r:]
+            right, r = utf8.decode_rune(suffix)
+        }
+    }
+    return is_cap(left) || is_cap(right)
+}
+
+display_draw_text :: proc(
+    theme: ^Theme, font: ^rl.Font, text: string, pos: [2]f32, color: rl.Color,
+    previous: rune = 0, origin: [2]f32 = {}, dash_context: Display_Dash_Context = {},
+) {
+    raster := display_raster_font(theme, font)
+    metrics: ^Font_Metrics
+    if variant, ok := display_font_variant(theme, font); ok do metrics = &theme.font_metrics[variant]
+    pen := Display_Pen{pos.x, previous}
+    case_y: i32
+    dash := dash_context
+    when ODIN_OS == .Darwin {
+        if font == &theme.fonts[.BODY] {
+            if theme.pixel_scale == {1, 1} && raster == font {
+                case_y = theme.body_placement.em_dash_case_y
+            } else if theme.pixel_scale == {2, 2} && raster == &theme.native_fonts[.BODY] {
+                case_y = theme.native_body_placement.em_dash_case_y
+            }
+        }
+        if dash.source == "" do dash = {text, 0}
+    }
+    for ch, offset in text {
+        x := display_pen_step(&pen, font, metrics, ch)
+        if ch != ' ' && ch != '	' {
+            index := rl.GetGlyphIndex(raster^, ch)
+            src := raster.recs[index]
+            if src.width > 0 && src.height > 0 {
+                p := [2]f32{x, pos.y} + origin
+                dst := display_glyph_destination(theme.pixel_scale, p, src, raster.glyphs[index])
+                if use_floor, half_rows := display_glyph_placement(theme, font, raster, index); use_floor {
+                    device_x, rows := display_glyph_phase(p.x * theme.pixel_scale.x, half_rows)
+                    dst.x = (device_x + f32(raster.glyphs[index].offsetX)) / theme.pixel_scale.x
+                    src.y += f32(rows)
+                }
+                if ch == '—' && case_y != 0 {
+                    at := dash.start + offset
+                    if display_em_dash_in_case_context(dash.source[:at], dash.source[at + len("—"):]) {
+                        dst.y += f32(case_y) / theme.pixel_scale.y
+                    }
+                }
+                rl.DrawTexturePro(raster.texture, src, dst, {}, 0, color)
+            }
+        }
+    }
+}
+
+// Only the rendered origin is rounded. Offsets and extents already belong to
+// the native bitmap, so each atlas texel covers exactly one framebuffer pixel.
+display_glyph_destination :: proc(scale, pos: [2]f32, src: rl.Rectangle, glyph: rl.GlyphInfo) -> rl.Rectangle {
+    origin := display_round_pixel(pos * scale) + {f32(glyph.offsetX), f32(glyph.offsetY)}
+    return {origin.x / scale.x, origin.y / scale.y, src.width / scale.x, src.height / scale.y}
+}
+
+@(private="file")
+display_round_pixel :: proc(pos: [2]f32) -> [2]f32 {
+    return {math.round(pos.x), math.round(pos.y)}
+}
+
+@(private="file")
+display_rect_pixel_edges :: proc(scale: [2]f32, rect: rl.Rectangle) -> (top_left, bottom_right: [2]f32) {
+    top_left = display_round_pixel([2]f32{rect.x, rect.y} * scale)
+    bottom_right = display_round_pixel([2]f32{rect.x + rect.width, rect.y + rect.height} * scale)
+    return
+}
+
+display_snap_rect :: proc(theme: ^Theme, rect: rl.Rectangle, floor_left := false) -> rl.Rectangle {
+    scale := theme.pixel_scale
+    top_left, bottom_right := display_rect_pixel_edges(scale, rect)
+    if floor_left do top_left.x = math.floor(rect.x * scale.x)
+    pos := top_left / scale
+    size := (bottom_right - top_left) / scale
+    return {pos.x, pos.y, size.x, size.y}
+}
+
+display_begin_scissor :: proc(theme: ^Theme, rect: rl.Rectangle, logical_height: i32) {
+    top_left, bottom_right := display_rect_pixel_edges(theme.pixel_scale, rect)
+    size := bottom_right - top_left
+    framebuffer_height := math.round(f32(logical_height) * theme.pixel_scale.y)
+    // Unlike BeginScissorMode, this takes native pixels for both a window and
+    // a render texture, and doesn't consult the window DPI for an offscreen target.
+    rlgl.DrawRenderBatchActive()
+    rlgl.EnableScissorTest()
+    rlgl.Scissor(i32(top_left.x), i32(framebuffer_height - bottom_right.y), i32(size.x), i32(size.y))
+}
+
+@(private="file")
+display_line_variant :: proc(line: Markdown_Line) -> Theme_Font_Variant {
+    if line.fenced do return .PRE
+    variants := THEME_HEADING_VARIANTS
+    if 1 <= line.heading_level && line.heading_level <= len(variants) {
+        return variants[line.heading_level - 1]
+    }
+    return .BODY
+}
+
+@(private="file")
+display_blank_caret :: proc(font: ^rl.Font, metrics: ^Font_Metrics, normal: bool, pos: [2]f32, height: f32) -> rl.Rectangle {
+    width: f32 = INSERT_CARET_W
+    if normal do width = max(width, display_glyph_advance(font, ' ', metrics))
+    return {pos.x, pos.y, width, height}
+}
+
+@(private="file")
+display_block_bounds :: proc(theme: ^Theme, font: ^rl.Font, ch: rune, pos: [2]f32, advance: f32) -> (rect: rl.Rectangle, has_ink: bool) {
+    rect = {pos.x, pos.y, max(f32(INSERT_CARET_W), advance), f32(font.baseSize)}
+    if ch == ' ' || ch == '\t' do return
+
+    raster := display_raster_font(theme, font)
+    index := rl.GetGlyphIndex(raster^, ch)
+    src := raster.recs[index]
+    if src.width <= 0 || src.height <= 0 do return
+
+    // Include the native bitmap's overhang relative to the pen. Leave origin
+    // snapping until draw time, when the viewport offset is known.
+    ink := display_glyph_destination(theme.pixel_scale, {}, src, raster.glyphs[index])
+    left, top := min(0, ink.x), min(0, ink.y)
+    right, bottom := max(rect.width, ink.x + ink.width), max(rect.height, ink.y + ink.height)
+    return {pos.x + left, pos.y + top, right - left, bottom - top}, true
+}
+
+// Layout emits one stack value at a time. A nil sink measures only the caret.
+Display_Emit :: proc(data: rawptr, cmd: Display_Command)
+
+// A checkpoint starts a physical line, before the parser classifies it.
+DISPLAY_CHECKPOINT_SPACING :: 1024
+Display_Checkpoint :: struct {
+    offset: int,
+    y: f32,
+    fence_length: int,
+    fence_marker: byte,
+}
+
+display_invalidate_from :: proc(ed: ^Editor, offset: int) {
+    checkpoints := &ed.display.checkpoints
+    for len(checkpoints) > 0 && checkpoints[len(checkpoints) - 1].offset > offset {
+        pop(checkpoints)
+    }
+    ed.should_scroll_cursor_into_view = true
+}
+
+@(private="file")
+display_find_checkpoint :: proc(checkpoints: []Display_Checkpoint, offset: int, y: f32) -> Display_Checkpoint {
+    lo, hi := 0, len(checkpoints)
+    for lo < hi {
+        mid := lo + (hi - lo) / 2
+        checkpoint := checkpoints[mid]
+        if checkpoint.offset <= offset && checkpoint.y <= y do lo = mid + 1
+        else do hi = mid
+    }
+    return checkpoints[lo - 1] if lo > 0 else {}
+}
+
+// Return the caret rectangle for scrolling the cursor into view.
 display_command_gen :: proc(
-    ed: ^Editor, 
+    ed: ^Editor,
     theme: ^Theme,
     bounds_size: [2]f32,
-    commands: ^[dynamic]Display_Command,
-) -> (ok: bool, caret_rect: rl.Rectangle) {
-    // TODO(Apaar): Handle selection
-    sel_pos := ed.state.selection[0]
-    sel_loc := byte_index_to_editor_loc(sel_pos, ed.sb.buf[:])
-
-    // TODO(Apaar): Handle horizontal scroll
-    draw_pos := [?]f32{0, 0}
-
-    cur_line_text_w: f32
-    cur_line_max_text_h: f32
-
+    emit: Display_Emit = nil,
+    emit_data: rawptr = nil,
+    stop_y: f32 = -1,
+    viewport_top: f32 = -max(f32),
+) -> (caret_rect: rl.Rectangle) {
+    // TODO(Apaar): Handle selection and horizontal scroll
     src := string(ed.sb.buf[:])
+    sel_pos := ed.state.selection[0]
+    normal := ed.mode == .NORMAL
+    cursor_glyph: Display_Command_Text
+    cursor_glyph_pos: [2]f32
+    cursor_dash_context: Display_Dash_Context
 
-    // Used to restore state when doing wrapping
+    draw_pos: [2]f32
+    body_height := f32(theme.fonts[.BODY].baseSize)
+    checkpoint: Display_Checkpoint
+    last_checkpoint_offset := 0
+    use_checkpoints := viewport_top != -max(f32)
+    if use_checkpoints {
+        if ed.display.checkpoint_width != bounds_size.x || ed.display.checkpoint_zoom != theme.zoom_level {
+            clear(&ed.display.checkpoints)
+            ed.display.checkpoint_width = bounds_size.x
+            ed.display.checkpoint_zoom = theme.zoom_level
+        }
+        if len(ed.display.checkpoints) > 0 {
+            last_checkpoint_offset = ed.display.checkpoints[len(ed.display.checkpoints) - 1].offset
+        }
+        if emit == nil {
+            checkpoint = display_find_checkpoint(ed.display.checkpoints[:], sel_pos, max(f32))
+        } else {
+            // Keep the same glyph overhang allowance as display_command_draw.
+            max_height := max(body_height, f32(theme.fonts[.PRE].baseSize), f32(theme.fonts[.H1].baseSize))
+            if theme.zoom_level < len(theme.data.zoom_level_to_font_sizes) {
+                sizes := theme.data.zoom_level_to_font_sizes[theme.zoom_level]
+                max_height = max(max_height, f32(sizes[.PRE]), f32(sizes[.H1]))
+            }
+            slack := 2 * max_height
+            checkpoint = display_find_checkpoint(ed.display.checkpoints[:], len(src), viewport_top - slack)
+        }
+    }
+    p := Parser{
+        lex = {src[checkpoint.offset:], checkpoint.offset},
+        line_start = checkpoint.offset,
+        fence_length = checkpoint.fence_length,
+        fence_marker = checkpoint.fence_marker,
+    }
+    draw_pos.y = checkpoint.y
+    line_height := body_height
+    line_variant := Theme_Font_Variant.BODY
+    if p.fence_length != 0 {
+        line_variant = .PRE
+        theme_ensure_font(theme, .PRE)
+        line_height = max(body_height, f32(theme.fonts[.PRE].baseSize))
+    }
+    previous_variant := line_variant
+    previous: rune
 
-    nodes := parser_parse_string(string(ed.sb.buf[:]))
-    nodes_iter := list_iterator_make(nodes)
-
-    min_line_height := f32(theme.fonts[.BODY].baseSize)
-
-    loop: for node in list_iterator_iterate(&nodes_iter) {
-        contains_caret := node.extents[0] <= sel_pos && sel_pos <= node.extents[1]
-        
-        caret_idx := contains_caret ? sel_pos - node.extents[0] : -1
-
-        font: ^rl.Font
-        all_spaces := false
+    layout: for node in parser_next_node(&p) {
+        if emit == nil && caret_rect.height > 0 do break
+        if stop_y >= 0 && draw_pos.y >= stop_y do break
+        line_variant = display_line_variant(p.line)
+        theme_ensure_font(theme, line_variant)
+        min_line_height := max(body_height, f32(theme.fonts[line_variant].baseSize))
+        line_height = max(line_height, min_line_height)
+        start, end := node.extents[0], node.extents[1]
+        // Half-open extents assign each caret offset once. A newline owns
+        // the caret before it, not the caret at the start of the next line.
+        contains_caret := start <= sel_pos && sel_pos < end
 
         #partial switch sub in node.sub {
             case Node_Newline:
-                line_height := max(cur_line_max_text_h, min_line_height)
-
-                // Nothing else to draw, just reset
-                draw_pos.x = 0
-                draw_pos.y += line_height
-
-                cur_line_text_w = 0
-                cur_line_max_text_h = 0
-
                 if contains_caret {
-                    caret_rect = {draw_pos.x, draw_pos.y, 2, line_height}
+                    caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+                }
+                draw_pos = {0, draw_pos.y + line_height}
+                // The parser classifies the next physical line on demand. At
+                // EOF, a trailing newline leaves an empty row in the fence (if open).
+                line_variant = p.fence_length != 0 ? .PRE : .BODY
+                line_height = body_height
+                if p.fence_length != 0 do line_height = max(body_height, f32(theme.fonts[.PRE].baseSize))
+                previous = 0
+                if use_checkpoints && end - last_checkpoint_offset >= DISPLAY_CHECKPOINT_SPACING {
+                    append(&ed.display.checkpoints, Display_Checkpoint{end, draw_pos.y, p.fence_length, p.fence_marker})
+                    last_checkpoint_offset = end
                 }
 
-                continue loop
-            
             case Node_Text:
-                if sub.pre do font = &theme.fonts[.PRE]
-                else do font = &theme.fonts[.BODY]
+                variant := sub.pre ? Theme_Font_Variant.PRE : line_variant
+                heading_code := sub.pre && !p.line.fenced && p.line.heading_level > 0
+                if heading_code {
+                    code_variants := THEME_HEADING_CODE_VARIANTS
+                    variant = code_variants[p.line.heading_level - 1]
+                }
+                if variant != line_variant do theme_ensure_font(theme, variant)
+                offset_y := f32(0)
+                if heading_code do offset_y = theme_heading_code_offset(theme, line_variant, variant)
+                font := &theme.fonts[variant]
+                metrics := &theme.font_metrics[variant]
+                font_height := f32(font.baseSize)
+                text := sub.text
+                if variant != previous_variant do previous = 0
+                previous_variant = variant
 
-                all_spaces = sub.all_spaces
+                pen := Display_Pen{draw_pos.x, previous}
+                for ch in text do display_pen_step(&pen, font, metrics, ch)
+                if draw_pos.x > 0 && pen.x > bounds_size.x {
+                    // Drop whitespace at a soft wrap. If the logical line
+                    // ends here, don't add an extra visual line before it.
+                    if !sub.all_spaces || (end < len(src) && src[end] != '\n') {
+                        draw_pos = {0, draw_pos.y + line_height}
+                        line_height = min_line_height
+                        previous = 0
+                    }
+                    if sub.all_spaces {
+                        if contains_caret {
+                            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+                        }
+                        continue
+                    }
+                    // The first pair on the new row no longer has a predecessor.
+                    pen = {}
+                    for ch in text do display_pen_step(&pen, font, metrics, ch)
+                }
+
+                // Most tokens fit unchanged. Split oversized ones at rune
+                // boundaries and always allow at least one glyph per row.
+                split_token := pen.x > bounds_size.x
+                chunk_start := 0
+                for chunk_start < len(text) {
+                    if stop_y >= 0 && draw_pos.y >= stop_y do break layout
+                    chunk_end := len(text)
+                    if split_token {
+                        pen = {draw_pos.x, previous}
+                        for ch, offset in text[chunk_start:] {
+                            next_pen := pen
+                            display_pen_step(&next_pen, font, metrics, ch)
+                            if offset > 0 && next_pen.x > bounds_size.x {
+                                chunk_end = chunk_start + offset
+                                break
+                            }
+                            pen = next_pen
+                        }
+                    }
+
+                    if emit != nil {
+                        color := theme.data.fg_color
+                        if p.line.quoted do color = rl.ColorLerp(color, theme.data.bg_color, 0.25)
+                        emit(emit_data, Display_Command{
+                            pos = {draw_pos.x, draw_pos.y + offset_y},
+                            previous = previous,
+                            dash_context = {src, start + chunk_start},
+                            sub = Display_Command_Text{
+                                text = text[chunk_start:chunk_end],
+                                font = font,
+                                color = color,
+                            },
+                        })
+                    }
+
+                    if start + chunk_start <= sel_pos && sel_pos < start + chunk_end {
+                        caret_pen := Display_Pen{draw_pos.x, previous}
+                        offset := chunk_start
+                        // The selection is a byte offset and may land inside a rune.
+                        for offset < chunk_end {
+                            ch, size := utf8.decode_rune(text[offset:chunk_end])
+                            x := display_pen_step(&caret_pen, font, metrics, ch)
+                            if sel_pos - start < offset + size {
+                                pos := [2]f32{x, draw_pos.y}
+                                caret_rect = {pos.x, pos.y, INSERT_CARET_W, font_height}
+                                if heading_code do caret_rect.height = min_line_height
+                                if normal {
+                                    pos.y += offset_y
+                                    has_ink: bool
+                                    caret_rect, has_ink = display_block_bounds(theme, font, ch, pos, caret_pen.x - x)
+                                    if has_ink {
+                                        cursor_glyph_pos = pos
+                                        cursor_glyph = {text[offset:offset+size], font, theme.data.bg_color}
+                                        cursor_dash_context = {src, start + offset}
+                                    }
+                                }
+                                break
+                            }
+                            offset += size
+                        }
+                    }
+
+                    draw_pos.x = pen.x
+                    previous = pen.previous
+                    line_height = max(line_height, font_height)
+                    chunk_start = chunk_end
+                    if emit == nil && caret_rect.height > 0 do break layout
+                    if chunk_start < len(text) {
+                        draw_pos = {0, draw_pos.y + line_height}
+                        line_height = min_line_height
+                        previous = 0
+                    }
+                }
         }
-
-        font_size := f32(font.baseSize)
-
-        token_str := node_edit_string(node^)
-
-        token_size := rl.MeasureTextEx(
-            font^,
-            strings.clone_to_cstring(token_str, context.temp_allocator),
-            font_size,
-            spacing=0,
-        )
-
-        if cur_line_text_w + token_size.x > bounds_size.x {
-            // TODO(Apaar): Split individual tokens longer than wrap_w. Right now we just draw.
-            if cur_line_text_w == 0 {
-                append(commands, Display_Command{
-                    pos = draw_pos,
-                    sub = Display_Command_Text{
-                        text = token_str,
-                        font = font,
-                        color = theme.data.fg_color,
-                    },
-                })
-
-                draw_pos.x = 0
-                draw_pos.y += max(cur_line_max_text_h, font_size)
-
-                cur_line_text_w = 0
-                cur_line_max_text_h = 0
-
-                continue
-            }
-
-            // Reset back to the left
-            draw_pos.x = 0
-
-            // In case this is the first token, it will hit the font_size case
-            draw_pos.y += max(cur_line_max_text_h, font_size)
-
-            cur_line_text_w = 0
-            cur_line_max_text_h = 0
-
-            if all_spaces {
-                // If the spaces cause a line break, just skip em
-                continue
-            }
-
-            // Move back to before this token, go down a line, and continue
-            list_iterator_move_back_to_prev_once(&nodes_iter)
-
-            continue
-        }
-
-        cur_line_text_w += token_size.x
-
-        if token_size.y > cur_line_max_text_h {
-            cur_line_max_text_h = token_size.y
-        }
-
-        append(commands, Display_Command{
-            pos = draw_pos,
-            sub = Display_Command_Text{
-                text = token_str,
-                font = font,
-                color = theme.data.fg_color,
-            }
-        })
-
-        if caret_idx >= 0 {
-            sub_text := token_str[:caret_idx]
-            sub_text_size := rl.MeasureTextEx(
-                font^,
-                strings.clone_to_cstring(sub_text, context.temp_allocator),
-                font_size,
-                spacing=0,
-            )
-
-            caret_rect = {draw_pos.x + sub_text_size.x, draw_pos.y, 2, sub_text_size.y}
-        }
-
-        draw_pos.x += token_size.x
     }
 
-    append(commands, Display_Command{
-        pos = {caret_rect.x, caret_rect.y},
-        sub = Display_Command_Rect{
-            w = caret_rect.width,
-            h = caret_rect.height,
-            color = theme.data.fg_color,
-        },
-    })
+    if sel_pos == len(src) && (stop_y < 0 || draw_pos.y < stop_y) {
+        caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+    }
+    if caret_rect.height <= 0 do return caret_rect
+    if cursor_glyph.text != "" && caret_rect.x < bounds_size.x {
+        // Clip ink overhang instead of shifting the block away from its glyph.
+        right := min(bounds_size.x, caret_rect.x + caret_rect.width)
+        caret_rect.x = max(0, caret_rect.x)
+        caret_rect.width = right - caret_rect.x
+    } else {
+        // At an exactly filled edge, keep the blank or thin caret visible.
+        if normal do caret_rect.width = min(caret_rect.width, bounds_size.x)
+        caret_rect.x = min(caret_rect.x, max(f32(0), bounds_size.x - caret_rect.width))
+    }
 
-    return true, caret_rect
+    if emit != nil {
+        floor_left := false
+        if cursor_glyph.text != "" {
+            raster := display_raster_font(theme, cursor_glyph.font)
+            ch, _ := utf8.decode_rune(cursor_glyph.text)
+            floor_left, _ = display_glyph_placement(theme, cursor_glyph.font, raster, rl.GetGlyphIndex(raster^, ch))
+        }
+        emit(emit_data, Display_Command{
+            pos = {caret_rect.x, caret_rect.y},
+            sub = Display_Command_Rect{
+                w = caret_rect.width,
+                h = caret_rect.height,
+                color = theme.data.fg_color,
+                floor_left = floor_left,
+            },
+        })
+        // Paint the block after the page text, then invert just the selected rune.
+        if cursor_glyph.text != "" {
+            emit(emit_data, Display_Command{pos = cursor_glyph_pos, dash_context = cursor_dash_context, sub = cursor_glyph})
+        }
+    }
+
+    return caret_rect
 }
 
-display_command_run_all :: proc(
-    commands: []Display_Command, 
-    top_left: [2]f32, 
-    scroll_pos: [2]f32,
-) {
-    for &cmd in commands {
-        pos := cmd.pos + top_left - scroll_pos
+Display_Viewport :: struct {
+    theme: ^Theme,
+    origin: [2]f32,
+    top, bottom: f32,
+}
 
-        switch sub in cmd.sub {
-            case Display_Command_Text: {
-                rl.DrawTextEx(
-                    sub.font^,
-                    strings.clone_to_cstring(sub.text, context.temp_allocator),
-                    position=pos,
-                    fontSize=f32(sub.font.baseSize),
-                    spacing=0,
-                    tint=sub.color,
-                )
-            }
+display_command_draw :: proc(data: rawptr, cmd: Display_Command) {
+    viewport := cast(^Display_Viewport)data
+    pos := cmd.pos + viewport.origin
+    if pos.y >= viewport.bottom do return
 
-            case Display_Command_Rect: {
-                rl.DrawRectangleRec(
-                    rl.Rectangle{
-                        pos.x,
-                        pos.y,
-                        sub.w,
-                        sub.h,
-                    },
-                    sub.color,
-                )
-            }
-        }
+    switch sub in cmd.sub {
+        case Display_Command_Text:
+            // Include a row of slack for font ascenders/descenders and padding.
+            if pos.y + 2 * f32(sub.font.baseSize) <= viewport.top do return
+            display_draw_text(viewport.theme, sub.font, sub.text, cmd.pos, sub.color, cmd.previous, viewport.origin, cmd.dash_context)
+
+        case Display_Command_Rect:
+            if pos.y + sub.h <= viewport.top do return
+            rl.DrawRectangleRec(display_snap_rect(viewport.theme, {pos.x, pos.y, sub.w, sub.h}, sub.floor_left), sub.color)
     }
 }

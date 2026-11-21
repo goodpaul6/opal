@@ -1,6 +1,10 @@
 package main
 
+import "core:os"
+import "core:fmt"
+import "core:time"
 import rl "vendor:raylib"
+import rlgl "vendor:raylib/rlgl"
 
 WINDOW_TITLE :: "Opal"
 WINDOW_INIT_WIDTH :: 800
@@ -8,9 +12,21 @@ WINDOW_INIT_HEIGHT :: 450
 PAGE_MARGIN_TOP :: 40
 PAGE_MARGIN_BOTTOM :: 40
 PAGE_WIDTH_PCT :: 0.5
+OPAL_TRACE_INPUT :: #config(OPAL_TRACE_INPUT, false)
+
+Input_Frame_Trace :: struct {
+    caret, page, status: time.Duration,
+}
 
 main :: proc() {
-    rl.SetConfigFlags({.WINDOW_RESIZABLE})
+    if len(os.args) > 1 && os.args[1] == "--screenshot" {
+        os.exit(screenshot_main(os.args[2:]))
+    }
+    benchmark_startup := len(os.args) > 1 && os.args[1] == "--benchmark-startup"
+    launch, window_ready, theme_ready, frame_drawn: time.Tick
+    if benchmark_startup do launch = time.tick_now()
+
+    rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_HIGHDPI})
 
     rl.InitWindow(
         title=WINDOW_TITLE, 
@@ -18,14 +34,22 @@ main :: proc() {
         height=WINDOW_INIT_HEIGHT,
     )
     defer rl.CloseWindow()
+    if benchmark_startup do window_ready = time.tick_now()
 
     rl.SetExitKey(.KEY_NULL)
 
     default_theme_data := theme_data_make_default()
     defer theme_data_destroy(&default_theme_data)
 
-    theme := theme_make(&default_theme_data)
+    initial_scale := [2]f32{1, 1}
+    width, height := rl.GetScreenWidth(), rl.GetScreenHeight()
+    pixel_width, pixel_height := rl.GetRenderWidth(), rl.GetRenderHeight()
+    if width > 0 && height > 0 && pixel_width > 0 && pixel_height > 0 {
+        initial_scale = {f32(pixel_width) / f32(width), f32(pixel_height) / f32(height)}
+    }
+    theme := theme_make(&default_theme_data, pixel_scale = initial_scale)
     defer theme_destroy(&theme)
+    if benchmark_startup do theme_ready = time.tick_now()
 
     ed := Editor{}
 
@@ -33,8 +57,14 @@ main :: proc() {
     defer editor_destroy(&ed)
 
     kr := Key_Repeat_State{}
+    keys := make([dynamic]rl.KeyboardKey, 0, 16)
+    defer delete(keys)
+    chars := make([dynamic]rune, 0, 16)
+    defer delete(chars)
 
     for !rl.WindowShouldClose() && !ed.exit_requested {
+        input_tick: time.Tick
+        when OPAL_TRACE_INPUT do input_tick = time.tick_now()
         key_repeat_begin_frame(&kr, 400)
         defer key_repeat_end_frame(&kr)
 
@@ -46,66 +76,183 @@ main :: proc() {
             case .INSERT: rl.SetMouseCursor(.IBEAM)
         }
 
-        for {
-            ch := rl.GetCharPressed()
-            if ch == 0 {
-                break
-            }
-            
-            editor_handle_charpress(&ed, ch)
-        }
-
         key_mods := Editor_Key_Mod_State{}
 
         if rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL) do key_mods += {.CTRL}
         if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) do key_mods += {.SHIFT}
+        if rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT) do key_mods += {.ALT}
 
-        for {
-            key := rl.GetKeyPressed()
-            if key == .KEY_NULL {
-                break
-            }
-
-            if key == .EQUAL && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, theme.zoom_level + 1)
-                continue
-            }
-
-            if key == .MINUS && .CTRL in key_mods {
-                theme_set_zoom_level(&theme, theme.zoom_level - 1)
-                continue
-            }
-
-            editor_handle_keypress(&ed, key, key_mods)
+        command_down := false
+        when ODIN_OS == .Darwin {
+            command_down = rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)
         }
 
+        clear(&keys)
+        for key := rl.GetKeyPressed(); key != .KEY_NULL; key = rl.GetKeyPressed() {
+            append(&keys, key)
+        }
+        clear(&chars)
+        for ch := rl.GetCharPressed(); ch != 0; ch = rl.GetCharPressed() {
+            append(&chars, ch)
+        }
+        shortcut_repeated := false
+        if len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods) {
+            shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .E, .F, .W}
+            for key in shortcut_keys {
+                if rl.IsKeyPressedRepeat(key) && live_editor_shortcut_suppresses_chars(ed.mode, key, key_mods, command_down) {
+                    shortcut_repeated = true
+                    break
+                }
+            }
+        }
+        live_editor_handle_input(&ed, &theme, keys[:], chars[:], key_mods, command_down, shortcut_repeated)
+
+        repeats := 0
         for key in rl.KeyboardKey {
-            if key_repeat_should_repeat(&kr, key, 20) {
+            if key_repeat_should_repeat(&kr, key, 20) && !live_editor_consumes_key(key, key_mods, command_down) {
                 editor_handle_keypress(&ed, key, key_mods)
+                when OPAL_TRACE_INPUT do repeats += 1
             }
         }
 
-        render_w := f32(rl.GetRenderWidth())
-        render_h := f32(rl.GetRenderHeight())
-
-        page_w := render_w * PAGE_WIDTH_PCT
-        margin_side := render_w * ((1 - PAGE_WIDTH_PCT) / 2)
-
+        trace: Input_Frame_Trace
+        frame_trace: ^Input_Frame_Trace
+        input_end, draw_end: time.Tick
+        when OPAL_TRACE_INPUT {
+            if len(keys) + len(chars) + repeats > 0 {
+                input_end = time.tick_now()
+                frame_trace = &trace
+            }
+        }
         rl.BeginDrawing()
-            rl.ClearBackground(theme.data.bg_color)
-
-            editor_display_begin(&ed, &theme, {
-                margin_side,
-                PAGE_MARGIN_TOP,
-                page_w,
-                render_h - editor_status_line_height(&theme) - PAGE_MARGIN_BOTTOM,
-            })
-
-            editor_display_draw(&ed, &theme)
-
-            editor_display_end(&ed)
+            draw_editor_frame(
+                &ed, &theme,
+                rl.GetScreenWidth(), rl.GetScreenHeight(),
+                rl.GetRenderWidth(), rl.GetRenderHeight(),
+                frame_trace,
+            )
+        when OPAL_TRACE_INPUT {
+            if frame_trace != nil do draw_end = time.tick_now()
+        }
+        if benchmark_startup do frame_drawn = time.tick_now()
         rl.EndDrawing()
+        if benchmark_startup {
+            presented := time.tick_now()
+            fmt.printf("startup: window %.3f ms, fonts %.3f ms, first draw %.3f ms, present/poll %.3f ms, total %.3f ms\n",
+                time.duration_milliseconds(time.tick_diff(launch, window_ready)),
+                time.duration_milliseconds(time.tick_diff(window_ready, theme_ready)),
+                time.duration_milliseconds(time.tick_diff(theme_ready, frame_drawn)),
+                time.duration_milliseconds(time.tick_diff(frame_drawn, presented)),
+                time.duration_milliseconds(time.tick_diff(launch, presented)))
+            break
+        }
+        when OPAL_TRACE_INPUT {
+            if frame_trace != nil {
+                present := time.tick_since(draw_end)
+                draw := time.tick_diff(input_end, draw_end)
+                fmt.eprintf(
+                    "input keys=%d chars=%d repeats=%d bytes=%d zoom=%d: input %.3f ms, caret %.3f ms, page %.3f ms, status %.3f ms, other draw %.3f ms, present/poll %.3f ms\n",
+                    len(keys), len(chars), repeats, len(ed.sb.buf), theme.zoom_level,
+                    time.duration_milliseconds(time.tick_diff(input_tick, input_end)),
+                    time.duration_milliseconds(trace.caret), time.duration_milliseconds(trace.page),
+                    time.duration_milliseconds(trace.status),
+                    time.duration_milliseconds(draw - trace.caret - trace.page - trace.status),
+                    time.duration_milliseconds(present),
+                )
+            }
+        }
 
         free_all(context.temp_allocator)
     }
+}
+
+live_zoom_shortcut_delta :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State, command_down: bool) -> int {
+    if .CTRL not_in mods && !(ODIN_OS == .Darwin && command_down) do return 0
+    #partial switch key {
+        case .EQUAL: return 1
+        case .MINUS: return -1
+        case: return 0
+    }
+}
+
+live_editor_consumes_key :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State, command_down: bool) -> bool {
+    // Like Ctrl and Shift, the Command modifier itself should not cancel a pending editor action.
+    when ODIN_OS == .Darwin {
+        if key == .LEFT_SUPER || key == .RIGHT_SUPER do return true
+    }
+    return live_zoom_shortcut_delta(key, mods, command_down) != 0
+}
+
+@(private="file")
+live_editor_shortcut_suppresses_chars :: proc(
+    mode: Editor_Mode, key: rl.KeyboardKey, mods: Editor_Key_Mod_State, command_down: bool,
+) -> bool {
+    if .CTRL in mods && live_zoom_shortcut_delta(key, mods, command_down) != 0 do return true
+    if mode == .NORMAL do return false
+    _, shortcut := editor_text_letter_shortcut(key, mods)
+    return shortcut
+}
+
+live_editor_handle_input :: proc(
+    ed: ^Editor, theme: ^Theme, keys: []rl.KeyboardKey, chars: []rune,
+    mods: Editor_Key_Mod_State, command_down, shortcut_repeated: bool,
+) {
+    // Cocoa GLFW already excludes Super-modified text from raylib's char queue.
+    // Raylib does not associate Ctrl/Alt text with a key. Drop the frame's
+    // characters when a shortcut could have produced them.
+    discard_chars := shortcut_repeated
+    for key in keys {
+        if live_editor_shortcut_suppresses_chars(ed.mode, key, mods, command_down) {
+            discard_chars = true
+            break
+        }
+    }
+
+    // Preserve the editor's char-before-key order (e.g. Normal-mode replace).
+    if !discard_chars {
+        for ch in chars do editor_handle_charpress(ed, ch)
+    }
+    for key in keys {
+        if delta := live_zoom_shortcut_delta(key, mods, command_down); delta != 0 {
+            theme_set_zoom_level(theme, theme.zoom_level + delta)
+        } else if !live_editor_consumes_key(key, mods, command_down) {
+            editor_handle_keypress(ed, key, mods)
+        }
+    }
+}
+
+draw_editor_frame :: proc(ed: ^Editor, theme: ^Theme, width, height, pixel_width, pixel_height: i32, trace: ^Input_Frame_Trace = nil) {
+    if width <= 0 || height <= 0 || pixel_width <= 0 || pixel_height <= 0 do return
+    render_w := f32(width)
+    render_h := f32(height)
+    theme_set_pixel_scale(theme, {f32(pixel_width) / render_w, f32(pixel_height) / render_h})
+
+    // Use the same logical projection on both targets. BeginDrawing applies
+    // its own platform-specific DPI transform; BeginTextureMode does not.
+    rlgl.DrawRenderBatchActive()
+    projection := rlgl.GetMatrixProjection()
+    modelview := rlgl.GetMatrixModelview()
+    defer {
+        rlgl.DrawRenderBatchActive()
+        rlgl.SetMatrixProjection(projection)
+        rlgl.SetMatrixModelview(modelview)
+    }
+    rlgl.Viewport(0, 0, pixel_width, pixel_height)
+    rlgl.MatrixMode(rlgl.PROJECTION)
+    rlgl.LoadIdentity()
+    rlgl.Ortho(0, f64(width), f64(height), 0, 0, 1)
+    rlgl.MatrixMode(rlgl.MODELVIEW)
+    rlgl.LoadIdentity()
+
+    page_w := render_w * PAGE_WIDTH_PCT
+    margin_side := (render_w - page_w) / 2
+    status_h := editor_status_line_height(theme)
+    content_h := max(0, render_h - status_h)
+    top := min(PAGE_MARGIN_TOP, content_h / 2)
+    bottom := max(top, content_h - PAGE_MARGIN_BOTTOM)
+
+    rl.ClearBackground(theme.data.bg_color)
+    editor_display_begin(ed, theme, {margin_side, top, page_w, bottom - top})
+    editor_display_draw(ed, theme, width, height, trace)
+    editor_display_end(ed)
 }

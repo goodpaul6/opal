@@ -30,19 +30,21 @@ dyn_font_make :: proc(file_data: []u8) -> Dyn_Font {
 	}
 }
 
-dyn_font_draw_text :: proc(using font: ^Dyn_Font, text: string, font_size: i32, pos: rl.Vector2) {
+dyn_font_draw_text :: proc(font: ^Dyn_Font, text: string, font_size: i32, pos: rl.Vector2) {
 	codepoints := make([]rune, strings.rune_count(text), context.temp_allocator)
 
 	for codepoint, index in text {
 		codepoints[index] = codepoint
 	}
 
+	glyph_count: i32
 	rendered_glyphs := rl.LoadFontData(
-		raw_data(file_data),
-		i32(len(file_data)),
+		raw_data(font.file_data),
+		i32(len(font.file_data)),
 		font_size,
 		raw_data(codepoints),
 		i32(len(codepoints)),
 		.DEFAULT,
+		&glyph_count,
 	)
 }
