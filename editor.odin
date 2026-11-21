@@ -26,6 +26,7 @@ Editor_Key_Mod :: enum {
     CTRL,
     SHIFT,
     ALT,
+    CMD,
 }
 
 Editor_Key_Mod_State :: bit_set[Editor_Key_Mod]
@@ -404,6 +405,16 @@ editor_text_letter_shortcut :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_St
 
 @(private="file")
 editor_text_key :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State) -> (Editor_Text_Key, bool) {
+    if .CMD in mods {
+        #partial switch key {
+            case .LEFT: return {.Soft_Line_Start, false}, true
+            case .RIGHT: return {.Soft_Line_End, false}, true
+            case .UP: return {.Start, false}, true
+            case .DOWN: return {.End, false}, true
+            case .BACKSPACE: return {.Soft_Line_Start, true}, true
+            case .DELETE: return {.Soft_Line_End, true}, true
+        }
+    }
     word := .ALT in mods || .CTRL in mods
     #partial switch key {
         case .LEFT: return {word ? .Word_Left : .Left, false}, true
@@ -440,7 +451,7 @@ editor_handle_insert_text_key :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Ed
         }
     } else if action.deletes {
         pos := ed.state.selection[0]
-        if key == .BACKSPACE && pos >= 4 && string(ed.sb.buf[pos - 4:pos]) == "    " {
+        if translation == .Left && pos >= 4 && string(ed.sb.buf[pos - 4:pos]) == "    " {
             ed.state.selection = {pos - 4, pos}
             editor_delete_selection(ed)
         } else {
@@ -461,8 +472,8 @@ editor_handle_command_text_key :: proc(ed: ^Editor, action: Editor_Text_Key) {
             target = word_edit_target(buf, cursor, action.translation == .Word_Left)
         case .Left: target = max(0, cursor - 1)
         case .Right: target = min(len(buf), cursor + 1)
-        case .Soft_Line_Start: target = 0
-        case .Soft_Line_End: target = len(buf)
+        case .Start, .Soft_Line_Start: target = 0
+        case .End, .Soft_Line_End: target = len(buf)
     }
     if action.deletes && target != cursor {
         low, high := min(cursor, target), max(cursor, target)
@@ -473,12 +484,17 @@ editor_handle_command_text_key :: proc(ed: ^Editor, action: Editor_Text_Key) {
     ed.command_cursor = target
 }
 
-editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
-    if key == .LEFT_SHIFT || key == .RIGHT_SHIFT || key == .LEFT_CONTROL || key == .RIGHT_CONTROL {
-        // This should do nothing
-        return
+editor_is_modifier_key :: proc(key: rl.KeyboardKey) -> bool {
+    #partial switch key {
+        case .LEFT_SHIFT, .RIGHT_SHIFT, .LEFT_CONTROL, .RIGHT_CONTROL, .LEFT_ALT, .RIGHT_ALT,
+             .LEFT_SUPER, .RIGHT_SUPER:
+            return true
     }
-    if key == .LEFT_ALT || key == .RIGHT_ALT do return
+    return false
+}
+
+editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
+    if editor_is_modifier_key(key) do return
 
     editor_update_state_indices(ed)
 

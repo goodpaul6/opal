@@ -35,21 +35,24 @@ COMMIT_MONO_ASCENT :: 900
 COMMIT_MONO_HEIGHT :: 1100
 COMMIT_MONO_CAP_HEIGHT :: 700
 
-// Divide the H1-to-body interval into six steps, rounding to the nearest
-// pixel. A gap of at least six gives each heading its own nominal size.
-theme_font_sizes :: proc(h1, body, pre: i32) -> (sizes: Theme_Font_Sizes) {
-    steps :: len(THEME_HEADING_VARIANTS)
-    gap := h1 - body
-    assert(gap >= steps)
+theme_font_sizes :: proc(headings: [6]i32, body, pre: i32) -> (sizes: Theme_Font_Sizes) {
     sizes[.BODY] = body
     sizes[.PRE] = pre
     code_variants := THEME_HEADING_CODE_VARIANTS
     cap_height_ratio :: (f32(INTER_CAP_HEIGHT) / INTER_HEIGHT) / (f32(COMMIT_MONO_CAP_HEIGHT) / COMMIT_MONO_HEIGHT)
     for variant, i in THEME_HEADING_VARIANTS {
-        sizes[variant] = body + (gap * (steps - i32(i)) + steps / 2) / steps
-        sizes[code_variants[i]] = i32(math.round(f32(sizes[variant]) * cap_height_ratio))
+        sizes[variant] = headings[i]
+        sizes[code_variants[i]] = i32(math.round(f32(headings[i]) * cap_height_ratio))
     }
     return
+}
+
+@(private="file")
+theme_note_font_sizes :: proc(body: i32) -> Theme_Font_Sizes {
+    ratios := [?]f32{1.65, 1.36, 1.2, 1.1, 1, 0.95}
+    headings: [6]i32
+    for ratio, i in ratios do headings[i] = i32(math.round(f32(body) * ratio))
+    return theme_font_sizes(headings, body, i32(math.round(f32(body) * 0.9)))
 }
 
 // This is the static data for a given theme.
@@ -59,6 +62,9 @@ Theme_Data :: struct {
 
     bg_color: rl.Color,
     fg_color: rl.Color,
+    heading_color, muted_color, accent_color: rl.Color,
+    code_color, code_background: rl.Color,
+    line_spacing: f32,
 
     // Only the bundled faces opt in to scaling pair adjustments across sizes.
     reuse_font_pairs: bool,
@@ -91,16 +97,22 @@ theme_data_make_default :: proc() -> Theme_Data {
 
     data := Theme_Data{
         zoom_level_to_font_sizes = slice.clone([]Theme_Font_Sizes{
-            theme_font_sizes(36, 24, 24),
-            theme_font_sizes(48, 30, 30),
-            theme_font_sizes(60, 36, 36),
-            theme_font_sizes(72, 48, 48),
-            theme_font_sizes(96, 60, 60),
+            theme_note_font_sizes(20),
+            theme_note_font_sizes(23),
+            theme_note_font_sizes(27),
+            theme_note_font_sizes(32),
+            theme_note_font_sizes(38),
         }),
         font_data = font_data,
 
         bg_color = {0x16, 0x16, 0x1D, 0xFF},
         fg_color = {0xDC, 0xD7, 0xBA, 0xFF},
+        heading_color = {0xF3, 0xEB, 0xD5, 0xFF},
+        muted_color = {0x9B, 0x96, 0x8A, 0xFF},
+        accent_color = {0xC1, 0xAE, 0x8C, 0xFF},
+        code_color = {0xDE, 0xC4, 0x9C, 0xFF},
+        code_background = {0x23, 0x23, 0x29, 0xFF},
+        line_spacing = 1.35,
     }
     when ODIN_OS == .Darwin {
         data.reuse_font_pairs = true
@@ -137,7 +149,7 @@ theme_ensure_font :: proc(theme: ^Theme, variant: Theme_Font_Variant) {
 theme_load_logical_font :: proc(theme: ^Theme, variant: Theme_Font_Variant, size: i32, upload_texture: bool) {
     placement: ^Font_Raster_Placement
     when ODIN_OS == .Darwin {
-        if theme.zoom_level == 0 && variant == .BODY && size == 24 do placement = &theme.body_placement
+        if theme.zoom_level == 0 && variant == .BODY do placement = &theme.body_placement
     }
     theme.fonts[variant] = theme_load_font(theme.data, variant, size,
                                           &theme.font_metrics[variant], placement, cache_half = placement != nil,
@@ -201,15 +213,15 @@ theme_raster_size :: proc(logical_size: i32, pixel_scale_y: f32) -> i32 {
     return max(1, i32(math.round(f32(logical_size) * pixel_scale_y)))
 }
 
-theme_heading_code_offset :: proc(theme: ^Theme, heading, code: Theme_Font_Variant) -> f32 {
+theme_code_offset :: proc(theme: ^Theme, prose, code: Theme_Font_Variant) -> f32 {
     scale := theme.pixel_scale.y
     // Raylib and CoreText truncate the scaled ascent when they place glyphs
     // in the atlas. Match those baselines in framebuffer pixels.
-    heading_size := theme_raster_size(theme.fonts[heading].baseSize, scale)
+    prose_size := theme_raster_size(theme.fonts[prose].baseSize, scale)
     code_size := theme_raster_size(theme.fonts[code].baseSize, scale)
-    heading_baseline := i32(f32(heading_size) / INTER_HEIGHT * INTER_ASCENT)
+    prose_baseline := i32(f32(prose_size) / INTER_HEIGHT * INTER_ASCENT)
     code_baseline := i32(f32(code_size) / COMMIT_MONO_HEIGHT * COMMIT_MONO_ASCENT)
-    return f32(heading_baseline - code_baseline) / scale
+    return f32(prose_baseline - code_baseline) / scale
 }
 
 theme_set_pixel_scale :: proc(theme: ^Theme, scale: [2]f32) {
@@ -234,7 +246,7 @@ theme_update_native_font :: proc(theme: ^Theme, variant: Theme_Font_Variant, siz
     when ODIN_OS == .Darwin {
         if theme.zoom_level == 0 && variant == .BODY {
             theme.native_body_placement = {}
-            if logical_size == 24 && size == 48 do placement = &theme.native_body_placement
+            if size == 2 * logical_size do placement = &theme.native_body_placement
         }
     }
     if size != logical_size {

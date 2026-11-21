@@ -15,10 +15,12 @@ Parser :: struct {
     line: Markdown_Line,
     fence_marker: byte,
     fence_length: int,
+    fence_delimiter: bool,
 }
 
 @(private="file")
 parser_classify_line :: proc(p: ^Parser) -> Markdown_Line {
+    p.fence_delimiter = false
     src := p.lex.src
     line := Markdown_Line{fenced = p.fence_length != 0}
     indent := 0
@@ -44,10 +46,12 @@ parser_classify_line :: proc(p: ^Parser) -> Markdown_Line {
             }
             // The closing line itself is still code.
             p.fence_length = 0
+            p.fence_delimiter = true
         } else if marker != '`' || strings.index_byte(tail, '`') < 0 {
             p.fence_marker = marker
             p.fence_length = run
             line.fenced = true
+            p.fence_delimiter = true
         }
     } else if !line.fenced {
         if marker == '>' {

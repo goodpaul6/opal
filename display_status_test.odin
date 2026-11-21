@@ -194,3 +194,25 @@ test_command_word_keys_edit_at_caret :: proc(t: ^testing.T) {
     testing.expect_value(t, ed.exit_requested, true)
     testing.expect_value(t, ed.command_cursor, 0)
 }
+
+when ODIN_OS == .Darwin {
+    @(test)
+    test_prompt_command_shortcuts_use_prompt_boundaries :: proc(t: ^testing.T) {
+        ed: Editor
+        editor_init(&ed)
+        defer editor_destroy(&ed)
+        editor_begin_frame(&ed)
+        defer editor_end_frame(&ed)
+        editor_handle_keypress(&ed, .SEMICOLON, {.SHIFT})
+        for ch in "before tail" do editor_handle_charpress(&ed, ch)
+        editor_handle_keypress(&ed, .LEFT, {.ALT})
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.RIGHT_SUPER, .BACKSPACE}, nil, {}, true, false)
+        testing.expect_value(t, string(ed.command.buf[:]), "tail")
+        testing.expect_value(t, ed.command_cursor, 0)
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.DOWN}, nil, {}, true, false)
+        testing.expect_value(t, ed.command_cursor, 4)
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.UP, .DELETE}, nil, {}, true, false)
+        testing.expect_value(t, string(ed.command.buf[:]), "")
+        testing.expect_value(t, ed.command_cursor, 0)
+    }
+}

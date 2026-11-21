@@ -11,7 +11,6 @@ WINDOW_INIT_WIDTH :: 800
 WINDOW_INIT_HEIGHT :: 450
 PAGE_MARGIN_TOP :: 40
 PAGE_MARGIN_BOTTOM :: 40
-PAGE_WIDTH_PCT :: 0.5
 OPAL_TRACE_INPUT :: #config(OPAL_TRACE_INPUT, false)
 
 Input_Frame_Trace :: struct {
@@ -61,6 +60,9 @@ main :: proc() {
     defer delete(keys)
     chars := make([dynamic]rune, 0, 16)
     defer delete(chars)
+    drawn_size: [4]i32
+    redraw_after_wait := false
+    cursor := rl.MouseCursor.DEFAULT
 
     for !rl.WindowShouldClose() && !ed.exit_requested {
         input_tick: time.Tick
@@ -70,11 +72,6 @@ main :: proc() {
 
         editor_begin_frame(&ed)
         defer editor_end_frame(&ed)
-
-        switch ed.mode {
-            case .NORMAL, .COMMAND: rl.SetMouseCursor(.DEFAULT)
-            case .INSERT: rl.SetMouseCursor(.IBEAM)
-        }
 
         key_mods := Editor_Key_Mod_State{}
 
@@ -88,8 +85,10 @@ main :: proc() {
         }
 
         clear(&keys)
+        has_key_input := false
         for key := rl.GetKeyPressed(); key != .KEY_NULL; key = rl.GetKeyPressed() {
             append(&keys, key)
+            has_key_input = has_key_input || !editor_is_modifier_key(key)
         }
         clear(&chars)
         for ch := rl.GetCharPressed(); ch != 0; ch = rl.GetCharPressed() {
@@ -108,18 +107,53 @@ main :: proc() {
         live_editor_handle_input(&ed, &theme, keys[:], chars[:], key_mods, command_down, shortcut_repeated)
 
         repeats := 0
+        repeat_key_held := false
+        repeat_mods := live_editor_key_mods(key_mods, command_down)
         for key in rl.KeyboardKey {
-            if key_repeat_should_repeat(&kr, key, 20) && !live_editor_consumes_key(key, key_mods, command_down) {
-                editor_handle_keypress(&ed, key, key_mods)
-                when OPAL_TRACE_INPUT do repeats += 1
+            if !kr.keys[key].is_pressed || editor_is_modifier_key(key) ||
+                live_editor_consumes_key(key, key_mods, command_down) {
+                continue
+            }
+            repeat_key_held = true
+            if key_repeat_should_repeat(&kr, key, 20) {
+                editor_handle_keypress(&ed, key, repeat_mods)
+                repeats += 1
             }
         }
+
+        next_cursor := rl.MouseCursor.IBEAM if ed.mode == .INSERT else rl.MouseCursor.DEFAULT
+        if next_cursor != cursor {
+            rl.SetMouseCursor(next_cursor)
+            cursor = next_cursor
+        }
+        frame_size := [4]i32{rl.GetScreenWidth(), rl.GetScreenHeight(), rl.GetRenderWidth(), rl.GetRenderHeight()}
+        has_input := has_key_input || len(chars) > 0 || repeats > 0
+        wake_needs_redraw := redraw_after_wait && len(keys) == 0
+        if !has_input && !wake_needs_redraw && frame_size == drawn_size && !rl.IsWindowResized() {
+            free_all(context.temp_allocator)
+            // EndDrawing already polls after a swap. With no frame to swap,
+            // poll here instead, keeping the GPU idle until there is work.
+            if repeat_key_held {
+                // The editor's repeat deadline can expire without an OS event.
+                rl.WaitTime(0.001)
+                rl.PollInputEvents()
+            } else {
+                rl.EnableEventWaiting()
+                rl.PollInputEvents()
+                rl.DisableEventWaiting()
+                // An expose or restore can require a redraw at the same size.
+                redraw_after_wait = true
+            }
+            continue
+        }
+        redraw_after_wait = false
+        drawn_size = frame_size
 
         trace: Input_Frame_Trace
         frame_trace: ^Input_Frame_Trace
         input_end, draw_end: time.Tick
         when OPAL_TRACE_INPUT {
-            if len(keys) + len(chars) + repeats > 0 {
+            if has_input {
                 input_end = time.tick_now()
                 frame_trace = &trace
             }
@@ -127,8 +161,7 @@ main :: proc() {
         rl.BeginDrawing()
             draw_editor_frame(
                 &ed, &theme,
-                rl.GetScreenWidth(), rl.GetScreenHeight(),
-                rl.GetRenderWidth(), rl.GetRenderHeight(),
+                frame_size[0], frame_size[1], frame_size[2], frame_size[3],
                 frame_trace,
             )
         when OPAL_TRACE_INPUT {
@@ -151,13 +184,14 @@ main :: proc() {
                 present := time.tick_since(draw_end)
                 draw := time.tick_diff(input_end, draw_end)
                 fmt.eprintf(
-                    "input keys=%d chars=%d repeats=%d bytes=%d zoom=%d: input %.3f ms, caret %.3f ms, page %.3f ms, status %.3f ms, other draw %.3f ms, present/poll %.3f ms\n",
+                    "input keys=%d chars=%d repeats=%d bytes=%d zoom=%d: input %.3f ms, caret %.3f ms, page %.3f ms, status %.3f ms, other draw %.3f ms, present/poll %.3f ms, frame start to present %.3f ms\n",
                     len(keys), len(chars), repeats, len(ed.sb.buf), theme.zoom_level,
                     time.duration_milliseconds(time.tick_diff(input_tick, input_end)),
                     time.duration_milliseconds(trace.caret), time.duration_milliseconds(trace.page),
                     time.duration_milliseconds(trace.status),
                     time.duration_milliseconds(draw - trace.caret - trace.page - trace.status),
                     time.duration_milliseconds(present),
+                    time.duration_milliseconds(time.tick_diff(input_tick, draw_end) + present),
                 )
             }
         }
@@ -181,6 +215,14 @@ live_editor_consumes_key :: proc(key: rl.KeyboardKey, mods: Editor_Key_Mod_State
         if key == .LEFT_SUPER || key == .RIGHT_SUPER do return true
     }
     return live_zoom_shortcut_delta(key, mods, command_down) != 0
+}
+
+@(private="file")
+live_editor_key_mods :: proc(mods: Editor_Key_Mod_State, command_down: bool) -> Editor_Key_Mod_State {
+    when ODIN_OS == .Darwin {
+        if command_down do return mods + {.CMD}
+    }
+    return mods
 }
 
 @(private="file")
@@ -212,11 +254,12 @@ live_editor_handle_input :: proc(
     if !discard_chars {
         for ch in chars do editor_handle_charpress(ed, ch)
     }
+    key_mods := live_editor_key_mods(mods, command_down)
     for key in keys {
         if delta := live_zoom_shortcut_delta(key, mods, command_down); delta != 0 {
             theme_set_zoom_level(theme, theme.zoom_level + delta)
         } else if !live_editor_consumes_key(key, mods, command_down) {
-            editor_handle_keypress(ed, key, mods)
+            editor_handle_keypress(ed, key, key_mods)
         }
     }
 }
@@ -244,7 +287,8 @@ draw_editor_frame :: proc(ed: ^Editor, theme: ^Theme, width, height, pixel_width
     rlgl.MatrixMode(rlgl.MODELVIEW)
     rlgl.LoadIdentity()
 
-    page_w := render_w * PAGE_WIDTH_PCT
+    margin := min(render_w / 4, clamp(render_w * 0.075, 14, 64))
+    page_w := min(render_w - 2 * margin, 37 * f32(theme.fonts[.BODY].baseSize))
     margin_side := (render_w - page_w) / 2
     status_h := editor_status_line_height(theme)
     content_h := max(0, render_h - status_h)

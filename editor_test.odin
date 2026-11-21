@@ -202,6 +202,38 @@ test_insert_line_shortcuts_and_selected_deletion :: proc(t: ^testing.T) {
     testing.expect_value(t, editor_get_text(&ed), "first\none \nlast")
 }
 
+when ODIN_OS == .Darwin {
+    @(test)
+    test_insert_command_shortcuts_use_line_and_document_boundaries :: proc(t: ^testing.T) {
+        ed: Editor
+        editor_init(&ed)
+        defer editor_destroy(&ed)
+        strings.write_string(&ed.sb, "before\nalpha    tail\nafter")
+        ed.mode = .INSERT
+        caret :: len("before\nalpha    ")
+        ed.prev_frame_sel = {caret, caret}
+        editor_begin_frame(&ed)
+        defer editor_end_frame(&ed)
+        line_start :: len("before\n")
+
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.LEFT_SUPER, .BACKSPACE}, nil, {}, true, false)
+        testing.expect_value(t, editor_get_text(&ed), "before\ntail\nafter")
+        testing.expect_value(t, ed.state.selection, [2]int{line_start, line_start})
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.RIGHT}, nil, {}, true, false)
+        testing.expect_value(t, ed.state.selection[0], len("before\ntail"))
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.LEFT}, nil, {}, true, false)
+        testing.expect_value(t, ed.state.selection[0], line_start)
+
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.DELETE, .BACKSPACE}, nil, {}, true, false)
+        testing.expect_value(t, editor_get_text(&ed), "before\n\nafter")
+        testing.expect_value(t, ed.state.selection[0], line_start)
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.UP}, nil, {}, true, false)
+        testing.expect_value(t, ed.state.selection[0], 0)
+        live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.DOWN}, nil, {}, true, false)
+        testing.expect_value(t, ed.state.selection[0], len("before\n\nafter"))
+    }
+}
+
 @(test)
 test_editor_list_enter :: proc(t: ^testing.T) {
     deep_indent :: "                                                                "

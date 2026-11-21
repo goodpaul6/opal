@@ -8,6 +8,8 @@ In insert mode, press Enter at the end of a list item to continue it. Numbered l
 
 In insert mode and at the command prompt, Ctrl+W deletes the previous word. Alt+Left/Right or Alt+B/F move by word, and Alt+Backspace/Delete delete backward/forward by word. On macOS, use Option as Alt. Ctrl+A/Ctrl+E and Home/End move to the start/end of the line.
 
+On macOS, Cmd+Backspace deletes to the start of the line and Cmd+Forward Delete deletes to the end. Cmd+Left/Right move to the start/end of the line, and Cmd+Up/Down move to the start/end of the document. In the command prompt, these use the ends of the prompt text.
+
 In Normal mode, press `u` to undo and Ctrl+R to redo.
 
 ## Rendering checks
@@ -26,7 +28,7 @@ Pass any Markdown file in place of the fixture. Append `--density 2` for a 1600Ã
 odin run . -thread-count:1 -o:speed -define:OPAL_TRACE_INPUT=true
 ```
 
-The trace writes one line to stderr per frame with input, including key repeats. It reports input handling, caret layout, page layout and drawing, status drawing, and raylib presentation and event polling. A separate line records atlas and metrics preparation whenever a font size is built. The first use of a style can include an atlas build, and the previous zoom level retains its atlases for quick toggling.
+The trace writes one line to stderr per frame with input, including key repeats. It reports input handling, caret layout, page layout and drawing, status drawing, and raylib presentation and event polling. The total starts when Opal begins processing the frame. Idle Opal waits for events without submitting stationary frames. A separate line records atlas and metrics preparation whenever a font size is built. The first use of a style can include an atlas build, and the previous zoom level retains its atlases for quick toggling.
 
 ### Startup timings
 

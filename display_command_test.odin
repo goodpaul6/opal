@@ -15,7 +15,7 @@ make_display_test_theme :: proc(data: ^Theme_Data) -> Theme {
     }
     @(static) recs := [?]rl.Rectangle{{width = 5, height = 8}, {width = 6, height = 8}, {width = 3}}
     theme := Theme{data = data, pixel_scale = {1, 1}}
-    sizes := theme_font_sizes(18, 10, 10)
+    sizes := theme_font_sizes({18, 17, 15, 14, 13, 11}, 10, 10)
     for variant in Theme_Font_Variant {
         theme.fonts[variant] = rl.Font{
             baseSize = sizes[variant],
@@ -142,21 +142,22 @@ test_display_wrap_long_utf8_token :: proc(t: ^testing.T) {
 test_theme_heading_sizes :: proc(t: ^testing.T) {
     data := theme_data_make_default()
     defer theme_data_destroy(&data)
-    original := [?][3]i32{{36, 24, 24}, {48, 30, 30}, {60, 36, 36}, {72, 48, 48}, {96, 60, 60}}
-    found := 0
-    for sizes in data.zoom_level_to_font_sizes {
-        for want in original {
-            if ([3]i32{sizes[.H1], sizes[.BODY], sizes[.PRE]}) == want do found += 1
-        }
+    body_sizes := [?]i32{20, 23, 27, 32, 38}
+    if !testing.expect_value(t, len(data.zoom_level_to_font_sizes), len(body_sizes)) do return
+    for sizes, i in data.zoom_level_to_font_sizes {
+        testing.expect_value(t, sizes[.BODY], body_sizes[i])
+        testing.expect(t, sizes[.PRE] < sizes[.BODY])
         prev := sizes[.H1] + 1
         for variant in THEME_HEADING_VARIANTS {
             testing.expect(t, sizes[variant] < prev)
             prev = sizes[variant]
         }
-        testing.expect(t, prev > sizes[.BODY])
+        testing.expect(t, prev < sizes[.BODY])
     }
-    testing.expect_value(t, found, len(original))
-    testing.expect_value(t, theme_font_sizes(18, 12, 14), Theme_Font_Sizes{
+    defaults := data.zoom_level_to_font_sizes[0]
+    testing.expect_value(t, [6]i32{defaults[.H1], defaults[.H2], defaults[.H3], defaults[.H4], defaults[.H5], defaults[.H6]},
+                         [6]i32{33, 27, 24, 22, 20, 19})
+    testing.expect_value(t, theme_font_sizes({18, 17, 16, 15, 14, 13}, 12, 14), Theme_Font_Sizes{
         .H1 = 18, .H2 = 17, .H3 = 16, .H4 = 15, .H5 = 14, .H6 = 13, .BODY = 12, .PRE = 14,
         .H1_CODE = 17, .H2_CODE = 16, .H3_CODE = 15, .H4_CODE = 14, .H5_CODE = 13, .H6_CODE = 12,
     })
@@ -273,6 +274,41 @@ test_display_markdown_blocks_keep_source_and_caret_geometry :: proc(t: ^testing.
         testing.expect_value(t, text, Display_Command_Text{want.text, &theme.fonts[want.variant], want.quoted ? quote_color : data.fg_color})
         testing.expect_value(t, commands[i].pos.y, want.y)
     }
+}
+
+@(test)
+test_display_note_theme_keeps_hierarchy_and_block_insets :: proc(t: ^testing.T) {
+    data := theme_data_make_default()
+    defer theme_data_destroy(&data)
+    theme := make_display_test_theme(&data)
+    src :: "# Title\n> Quote\n~~~\ncode\n~~~\n"
+    commands, _ := make_display_test_layout(&theme, src, len(src), 100)
+    rails, code_rows: int
+    for cmd in commands {
+        switch part in cmd.sub {
+            case Display_Command_Rect:
+                if part.color == data.code_background {
+                    code_rows += 1
+                    testing.expect_value(t, part.w, f32(100))
+                    testing.expect_value(t, part.h, f32(14))
+                } else if part.color == data.accent_color && part.w == 2 && cmd.pos.y == 24 {
+                    rails += 1
+                }
+            case Display_Command_Text:
+                switch part.text {
+                    case "#", ">", "~~~": testing.expect_value(t, part.color, data.muted_color)
+                    case "Title": testing.expect_value(t, part.color, data.heading_color)
+                    case "Quote":
+                        testing.expect_value(t, part.color, data.fg_color)
+                        testing.expect_value(t, cmd.pos, [2]f32{14, 26})
+                    case "code":
+                        testing.expect_value(t, part.color, data.code_color)
+                        testing.expect_value(t, cmd.pos, [2]f32{5, 54})
+                }
+        }
+    }
+    testing.expect_value(t, rails, 1)
+    testing.expect_value(t, code_rows, 3)
 }
 
 @(test)

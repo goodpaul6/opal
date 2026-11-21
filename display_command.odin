@@ -244,6 +244,29 @@ display_block_bounds :: proc(theme: ^Theme, font: ^rl.Font, ch: rune, pos: [2]f3
 // Layout emits one stack value at a time. A nil sink measures only the caret.
 Display_Emit :: proc(data: rawptr, cmd: Display_Command)
 
+@(private="file")
+display_line_height :: proc(theme: ^Theme, variant: Theme_Font_Variant) -> f32 {
+    return math.round(f32(theme.fonts[variant].baseSize) * max(1, theme.data.line_spacing))
+}
+
+@(private="file")
+display_block_inset :: proc(theme: ^Theme, line: Markdown_Line, width: f32) -> f32 {
+    if (line.fenced && theme.data.code_background.a != 0) ||
+       (line.quoted && theme.data.accent_color.a != 0) {
+        return min(width / 4, f32(theme.fonts[.BODY].baseSize) / 2)
+    }
+    return 0
+}
+
+@(private="file")
+display_emit_block_row :: proc(emit: Display_Emit, emit_data: rawptr, theme: ^Theme, line: Markdown_Line, y, width, height: f32) {
+    if line.fenced && theme.data.code_background.a != 0 {
+        emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = width, h = height, color = theme.data.code_background}})
+    } else if line.quoted && theme.data.accent_color.a != 0 {
+        emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = 2, h = height, color = theme.data.accent_color}})
+    }
+}
+
 // A checkpoint starts a physical line, before the parser classifies it.
 DISPLAY_CHECKPOINT_SPACING :: 1024
 Display_Checkpoint :: struct {
@@ -292,7 +315,7 @@ display_command_gen :: proc(
     cursor_dash_context: Display_Dash_Context
 
     draw_pos: [2]f32
-    body_height := f32(theme.fonts[.BODY].baseSize)
+    body_height := display_line_height(theme, .BODY)
     checkpoint: Display_Checkpoint
     last_checkpoint_offset := 0
     use_checkpoints := viewport_top != -max(f32)
@@ -330,18 +353,21 @@ display_command_gen :: proc(
     if p.fence_length != 0 {
         line_variant = .PRE
         theme_ensure_font(theme, .PRE)
-        line_height = max(body_height, f32(theme.fonts[.PRE].baseSize))
+        line_height = max(body_height, display_line_height(theme, .PRE))
     }
     previous_variant := line_variant
     previous: rune
+    decorated := false
 
     layout: for node in parser_next_node(&p) {
         if emit == nil && caret_rect.height > 0 do break
         if stop_y >= 0 && draw_pos.y >= stop_y do break
         line_variant = display_line_variant(p.line)
         theme_ensure_font(theme, line_variant)
-        min_line_height := max(body_height, f32(theme.fonts[line_variant].baseSize))
+        min_line_height := max(body_height, display_line_height(theme, line_variant))
         line_height = max(line_height, min_line_height)
+        inset := display_block_inset(theme, p.line, bounds_size.x)
+        text_width := bounds_size.x - inset * 2
         start, end := node.extents[0], node.extents[1]
         // Half-open extents assign each caret offset once. A newline owns
         // the caret before it, not the caret at the start of the next line.
@@ -349,15 +375,20 @@ display_command_gen :: proc(
 
         #partial switch sub in node.sub {
             case Node_Newline:
+                if emit != nil && !decorated {
+                    display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height)
+                }
                 if contains_caret {
-                    caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+                    caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                                                     {draw_pos.x + inset, draw_pos.y}, line_height)
                 }
                 draw_pos = {0, draw_pos.y + line_height}
+                decorated = false
                 // The parser classifies the next physical line on demand. At
                 // EOF, a trailing newline leaves an empty row in the fence (if open).
                 line_variant = p.fence_length != 0 ? .PRE : .BODY
                 line_height = body_height
-                if p.fence_length != 0 do line_height = max(body_height, f32(theme.fonts[.PRE].baseSize))
+                if p.fence_length != 0 do line_height = max(body_height, display_line_height(theme, .PRE))
                 previous = 0
                 if use_checkpoints && end - last_checkpoint_offset >= DISPLAY_CHECKPOINT_SPACING {
                     append(&ed.display.checkpoints, Display_Checkpoint{end, draw_pos.y, p.fence_length, p.fence_marker})
@@ -372,8 +403,12 @@ display_command_gen :: proc(
                     variant = code_variants[p.line.heading_level - 1]
                 }
                 if variant != line_variant do theme_ensure_font(theme, variant)
-                offset_y := f32(0)
-                if heading_code do offset_y = theme_heading_code_offset(theme, line_variant, variant)
+                prose_height := f32(theme.fonts[line_variant].baseSize)
+                row_top := (min_line_height - prose_height) / 2 if theme.data.line_spacing > 1 else 0
+                offset_y := row_top
+                if heading_code || (sub.pre && !p.line.fenced && theme.data.line_spacing > 1) {
+                    offset_y += theme_code_offset(theme, line_variant, variant)
+                }
                 font := &theme.fonts[variant]
                 metrics := &theme.font_metrics[variant]
                 font_height := f32(font.baseSize)
@@ -383,17 +418,19 @@ display_command_gen :: proc(
 
                 pen := Display_Pen{draw_pos.x, previous}
                 for ch in text do display_pen_step(&pen, font, metrics, ch)
-                if draw_pos.x > 0 && pen.x > bounds_size.x {
+                if draw_pos.x > 0 && pen.x > text_width {
                     // Drop whitespace at a soft wrap. If the logical line
                     // ends here, don't add an extra visual line before it.
                     if !sub.all_spaces || (end < len(src) && src[end] != '\n') {
                         draw_pos = {0, draw_pos.y + line_height}
                         line_height = min_line_height
                         previous = 0
+                        decorated = false
                     }
                     if sub.all_spaces {
                         if contains_caret {
-                            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+                            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                                                             {draw_pos.x + inset, draw_pos.y}, line_height)
                         }
                         continue
                     }
@@ -404,7 +441,7 @@ display_command_gen :: proc(
 
                 // Most tokens fit unchanged. Split oversized ones at rune
                 // boundaries and always allow at least one glyph per row.
-                split_token := pen.x > bounds_size.x
+                split_token := pen.x > text_width
                 chunk_start := 0
                 for chunk_start < len(text) {
                     if stop_y >= 0 && draw_pos.y >= stop_y do break layout
@@ -414,7 +451,7 @@ display_command_gen :: proc(
                         for ch, offset in text[chunk_start:] {
                             next_pen := pen
                             display_pen_step(&next_pen, font, metrics, ch)
-                            if offset > 0 && next_pen.x > bounds_size.x {
+                            if offset > 0 && next_pen.x > text_width {
                                 chunk_end = chunk_start + offset
                                 break
                             }
@@ -423,10 +460,34 @@ display_command_gen :: proc(
                     }
 
                     if emit != nil {
+                        if !decorated {
+                            display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height)
+                            decorated = true
+                        }
                         color := theme.data.fg_color
-                        if p.line.quoted do color = rl.ColorLerp(color, theme.data.bg_color, 0.25)
+                        if p.line.quoted && theme.data.accent_color.a == 0 {
+                            color = rl.ColorLerp(color, theme.data.bg_color, 0.25)
+                        }
+                        if p.line.heading_level > 0 && theme.data.heading_color.a != 0 do color = theme.data.heading_color
+                        if sub.pre && theme.data.code_color.a != 0 do color = theme.data.code_color
+                        if theme.data.muted_color.a != 0 {
+                            marker := p.fence_delimiter || (text == "`" && !p.line.fenced)
+                            if start - p.line_start <= 3 {
+                                marker = marker || (p.line.quoted && text == ">") ||
+                                    (p.line.heading_level > 0 && len(text) == p.line.heading_level && text[0] == '#')
+                                if !p.line.fenced && (text == "-" || text == "+" || text == "*") &&
+                                    end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+                                    bullet := true
+                                    for byte in src[p.line_start:start] {
+                                        if byte != ' ' do bullet = false
+                                    }
+                                    marker = marker || bullet
+                                }
+                            }
+                            if marker do color = theme.data.muted_color
+                        }
                         emit(emit_data, Display_Command{
-                            pos = {draw_pos.x, draw_pos.y + offset_y},
+                            pos = {draw_pos.x + inset, draw_pos.y + offset_y},
                             previous = previous,
                             dash_context = {src, start + chunk_start},
                             sub = Display_Command_Text{
@@ -445,11 +506,11 @@ display_command_gen :: proc(
                             ch, size := utf8.decode_rune(text[offset:chunk_end])
                             x := display_pen_step(&caret_pen, font, metrics, ch)
                             if sel_pos - start < offset + size {
-                                pos := [2]f32{x, draw_pos.y}
+                                pos := [2]f32{x + inset, draw_pos.y + row_top}
                                 caret_rect = {pos.x, pos.y, INSERT_CARET_W, font_height}
-                                if heading_code do caret_rect.height = min_line_height
+                                if heading_code do caret_rect.height = prose_height
                                 if normal {
-                                    pos.y += offset_y
+                                    pos.y = draw_pos.y + offset_y
                                     has_ink: bool
                                     caret_rect, has_ink = display_block_bounds(theme, font, ch, pos, caret_pen.x - x)
                                     if has_ink {
@@ -473,13 +534,21 @@ display_command_gen :: proc(
                         draw_pos = {0, draw_pos.y + line_height}
                         line_height = min_line_height
                         previous = 0
+                        decorated = false
                     }
                 }
         }
     }
 
     if sel_pos == len(src) && (stop_y < 0 || draw_pos.y < stop_y) {
-        caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal, draw_pos, line_height)
+        eof_line := p.line
+        if p.line_start == len(src) do eof_line = {fenced = p.fence_length != 0}
+        if emit != nil && !decorated {
+            display_emit_block_row(emit, emit_data, theme, eof_line, draw_pos.y, bounds_size.x, line_height)
+        }
+        inset := display_block_inset(theme, eof_line, bounds_size.x)
+        caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                                         {draw_pos.x + inset, draw_pos.y}, line_height)
     }
     if caret_rect.height <= 0 do return caret_rect
     if cursor_glyph.text != "" && caret_rect.x < bounds_size.x {
@@ -505,7 +574,7 @@ display_command_gen :: proc(
             sub = Display_Command_Rect{
                 w = caret_rect.width,
                 h = caret_rect.height,
-                color = theme.data.fg_color,
+                color = theme.data.accent_color if theme.data.accent_color.a != 0 else theme.data.fg_color,
                 floor_left = floor_left,
             },
         })

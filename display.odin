@@ -87,17 +87,18 @@ editor_status_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32) {
 
     display_begin_scissor(theme, bar, height)
     defer rl.EndScissorMode()
-    rl.DrawRectangleRec(display_snap_rect(theme, bar), rl.ColorLerp(bg, fg, 0.125))
+    rl.DrawRectangleRec(display_snap_rect(theme, bar), rl.ColorLerp(bg, fg, 0.04))
     if layout.badge_width > 0 {
-        rl.DrawRectangleRec(display_snap_rect(theme, {0, bar.y, layout.badge_width, bar_h}), fg)
-        display_draw_text(theme, font, layout.label, {STATUS_PAD_X, text_y}, bg)
+        mode_color := theme.data.muted_color if ed.mode == .NORMAL else theme.data.accent_color
+        rl.DrawRectangleRec(display_snap_rect(theme, {0, bar.y, layout.badge_width, bar_h}), rl.ColorLerp(bg, mode_color, 0.12))
+        display_draw_text(theme, font, layout.label, {STATUS_PAD_X, text_y}, mode_color)
     }
     if ed.mode == .COMMAND {
         display_draw_text(theme, font, ":", {layout.prompt_x, text_y}, fg)
         display_draw_text(theme, font, layout.command_tail, {layout.command_x, text_y}, fg, ':')
         rl.DrawRectangleRec(
             display_snap_rect(theme, {layout.caret_x, text_y, INSERT_CARET_W, f32(font.baseSize)}),
-            fg,
+            theme.data.accent_color,
         )
     }
 }
