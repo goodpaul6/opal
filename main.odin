@@ -11,6 +11,7 @@ WINDOW_INIT_WIDTH :: 800
 WINDOW_INIT_HEIGHT :: 450
 PAGE_MARGIN_TOP :: 40
 PAGE_MARGIN_BOTTOM :: 40
+PAGE_WIDTH_PCT :: 0.5
 OPAL_TRACE_INPUT :: #config(OPAL_TRACE_INPUT, false)
 
 Input_Frame_Trace :: struct {
@@ -295,8 +296,7 @@ draw_editor_frame :: proc(ed: ^Editor, theme: ^Theme, width, height, pixel_width
     rlgl.MatrixMode(rlgl.MODELVIEW)
     rlgl.LoadIdentity()
 
-    margin := min(render_w / 4, clamp(render_w * 0.075, 14, 64))
-    page_w := min(render_w - 2 * margin, 37 * f32(theme.fonts[.BODY].baseSize))
+    page_w := render_w * PAGE_WIDTH_PCT
     margin_side := (render_w - page_w) / 2
     status_h := editor_status_line_height(theme)
     content_h := max(0, render_h - status_h)

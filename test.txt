@@ -1,14 +1,17 @@
-hello, world!
+Centered af.
 
-##### Hello, world!
+As always.
 
-> This is a quote
+# Testing 1
+
+> testing 2
 
 ```odin
-multi
-line
-whoa
-
-
-markdown af!
+// Is lie, this is C
+int x() {
+    printf("hello, world!");
+    return 0;
+}
 ```
+
+
