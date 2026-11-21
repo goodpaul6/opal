@@ -28,6 +28,7 @@ editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^
         case .NORMAL: layout.label = "NORMAL"
         case .INSERT: layout.label = "INSERT"
         case .COMMAND: layout.label = "COMMAND"
+        case .VISUAL: layout.label = "VISUAL LINE"
     }
     layout.badge_width = display_text_width(font, layout.label, metrics) + 2 * STATUS_PAD_X
     if ed.mode != .COMMAND do return

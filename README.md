@@ -12,6 +12,8 @@ On macOS, Cmd+Backspace deletes to the start of the line and Cmd+Forward Delete 
 
 In Normal mode, press `u` to undo and Ctrl+R to redo.
 
+Press Shift+V in Normal mode to select whole lines. Extend the selection with `j`/`k` or ↑/↓, then press `y` to copy or `d` to cut the selection to the system clipboard. In Normal mode, `p` pastes after the caret or line and Shift+P pastes before it. In Visual mode, `p` replaces the selection. Ctrl/Cmd+C copies the selection, and Ctrl/Cmd+V pastes in Normal, Visual, or Insert mode.
+
 ## Rendering checks
 
 Opal uses raylib. Capture a fixed-size PNG using the same editor renderer as the interactive window:

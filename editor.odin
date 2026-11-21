@@ -13,6 +13,7 @@ Editor_Mode :: enum {
     NORMAL,
     INSERT,
     COMMAND,
+    VISUAL,
 }
 
 Editor_Action :: enum {
@@ -60,6 +61,7 @@ Editor :: struct {
     state: te.State,
 
     prev_frame_sel: [2]int,
+    visual_anchor: int,
 
     pending_action: Editor_Action,
 
@@ -195,13 +197,13 @@ editor_update_state_indices :: proc(ed: ^Editor) {
     }
 }
 
-@(private="file")
+@(private="package")
 editor_find_line_end :: proc(buf: []byte, start: int) -> int {
     end := bytes.index_byte(buf[start:], '\n')
     return len(buf) if end < 0 else start + end
 }
 
-@(private="file")
+@(private="package")
 editor_insert_text :: proc(ed: ^Editor, text: string) {
     start, _ := te.sorted_selection(&ed.state)
     display_invalidate_from(ed, start)
@@ -215,7 +217,7 @@ editor_insert_rune :: proc(ed: ^Editor, ch: rune) {
     te.input_rune(&ed.state, ch)
 }
 
-@(private="file")
+@(private="package")
 editor_delete_selection :: proc(ed: ^Editor) {
     te.selection_delete(&ed.state)
     display_invalidate_from(ed, ed.state.selection[0])
@@ -276,7 +278,7 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
     return
 }
 
-@(private="file")
+@(private="package")
 track_text_and_pos :: proc(ed: ^Editor) {
     editor_undo_track(ed, &ed.sb.buf)
     editor_undo_track(ed, mem.slice_to_bytes(ed.state.selection[:]))
@@ -498,6 +500,19 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
 
     editor_update_state_indices(ed)
 
+    if .CTRL in mods || .CMD in mods {
+        if key == .V && ed.mode != .COMMAND {
+            ed.pending_action = .NONE
+            editor_paste(ed)
+            return
+        }
+        if key == .C && ed.mode == .VISUAL {
+            ed.pending_action = .NONE
+            editor_yank_lines(ed)
+            return
+        }
+    }
+
     outer_switch: switch ed.mode {
         case .NORMAL: {
             if key == .R && .CTRL in mods {
@@ -565,6 +580,16 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
 
             if key == .RIGHT_BRACKET && .SHIFT in mods {
                 ed.state.selection[0] = next_empty_line_byte_index(ed, 1)
+            }
+
+            if key == .V && mods == {.SHIFT} {
+                ed.visual_anchor = ed.state.line_start
+                ed.mode = .VISUAL
+                break
+            }
+            if key == .P && mods - {.SHIFT} == {} {
+                editor_paste(ed, before = .SHIFT in mods)
+                break
             }
 
             if key == .R {
@@ -681,6 +706,26 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
             }
         }
 
+        case .VISUAL: {
+            was_go := ed.pending_action == .GO
+            ed.pending_action = .NONE
+            #partial switch key {
+                case .ESCAPE, .V:
+                    if key == .ESCAPE || .SHIFT in mods do ed.mode = .NORMAL
+                case .LEFT_BRACKET:
+                    if .CTRL in mods do ed.mode = .NORMAL
+                case .J, .DOWN: te.move_to(&ed.state, .Down)
+                case .K, .UP: te.move_to(&ed.state, .Up)
+                case .G:
+                    if .SHIFT in mods do te.move_to(&ed.state, .End)
+                    else if was_go do te.move_to(&ed.state, .Start)
+                    else do ed.pending_action = .GO
+                case .Y: if mods - {.SHIFT} == {} do editor_yank_lines(ed)
+                case .D: if mods == {} do editor_delete_visual_lines(ed)
+                case .P: if mods - {.SHIFT} == {} do editor_paste(ed)
+            }
+        }
+
         case .COMMAND: {
             if action, ok := editor_text_key(key, mods); ok {
                 editor_handle_command_text_key(ed, action)
@@ -719,6 +764,7 @@ is_ascii :: proc(ch: rune) -> bool {
 
 editor_handle_charpress :: proc(ed: ^Editor, ch: rune) {
     switch ed.mode {
+        case .VISUAL: // Visual mode uses key bindings rather than text input.
         case .NORMAL: {
             if ed.pending_action == .REPLACE {
                 track_text_and_pos(ed)

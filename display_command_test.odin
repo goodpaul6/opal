@@ -312,6 +312,24 @@ test_display_note_theme_keeps_hierarchy_and_block_insets :: proc(t: ^testing.T) 
 }
 
 @(test)
+test_display_visual_line_highlights_wrapped_and_empty_rows :: proc(t: ^testing.T) {
+    data := Theme_Data{fg_color = rl.WHITE, bg_color = rl.BLACK, accent_color = rl.GOLD}
+    theme := make_display_test_theme(&data)
+    commands, _ := make_display_test_layout(&theme, "aaaaaa\n\nlast", len("aaaaaa\n"), 24, .VISUAL)
+    highlight := rl.ColorLerp(data.bg_color, data.accent_color, 0.25)
+    rows: [dynamic]f32
+    defer delete(rows)
+    for cmd in commands {
+        if rect, ok := cmd.sub.(Display_Command_Rect); ok && rect.color == highlight {
+            testing.expect_value(t, rect.w, f32(24))
+            append(&rows, cmd.pos.y)
+        }
+    }
+    testing.expect_value(t, len(rows), 3)
+    for y, i in rows do testing.expect_value(t, y, 10 * f32(i))
+}
+
+@(test)
 test_display_fence_blank_and_eof_carets :: proc(t: ^testing.T) {
     data: Theme_Data
     theme := make_display_test_theme(&data)

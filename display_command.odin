@@ -259,10 +259,18 @@ display_block_inset :: proc(theme: ^Theme, line: Markdown_Line, width: f32) -> f
 }
 
 @(private="file")
-display_emit_block_row :: proc(emit: Display_Emit, emit_data: rawptr, theme: ^Theme, line: Markdown_Line, y, width, height: f32) {
-    if line.fenced && theme.data.code_background.a != 0 {
+display_emit_block_row :: proc(
+    emit: Display_Emit, emit_data: rawptr, theme: ^Theme, line: Markdown_Line,
+    y, width, height: f32, selected: bool,
+) {
+    if selected {
+        accent := theme.data.accent_color if theme.data.accent_color.a != 0 else theme.data.fg_color
+        fill := rl.ColorLerp(theme.data.bg_color, accent, 0.25)
+        emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = width, h = height, color = fill}})
+    } else if line.fenced && theme.data.code_background.a != 0 {
         emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = width, h = height, color = theme.data.code_background}})
-    } else if line.quoted && theme.data.accent_color.a != 0 {
+    }
+    if line.quoted && theme.data.accent_color.a != 0 {
         emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = 2, h = height, color = theme.data.accent_color}})
     }
 }
@@ -306,10 +314,12 @@ display_command_gen :: proc(
     stop_y: f32 = -1,
     viewport_top: f32 = -max(f32),
 ) -> (caret_rect: rl.Rectangle) {
-    // TODO(Apaar): Handle selection and horizontal scroll
+    // TODO(Apaar): Handle horizontal scroll
     src := string(ed.sb.buf[:])
     sel_pos := ed.state.selection[0]
-    normal := ed.mode == .NORMAL
+    visual := ed.mode == .VISUAL
+    normal := ed.mode == .NORMAL || visual
+    selected_lines := editor_visual_lines(ed) if visual else [2]int{}
     cursor_glyph: Display_Command_Text
     cursor_glyph_pos: [2]f32
     cursor_dash_context: Display_Dash_Context
@@ -358,6 +368,7 @@ display_command_gen :: proc(
     previous_variant := line_variant
     previous: rune
     decorated := false
+    row_line_start := checkpoint.offset
 
     layout: for node in parser_next_node(&p) {
         if emit == nil && caret_rect.height > 0 do break
@@ -369,6 +380,7 @@ display_command_gen :: proc(
         inset := display_block_inset(theme, p.line, bounds_size.x)
         text_width := bounds_size.x - inset * 2
         start, end := node.extents[0], node.extents[1]
+        selected := visual && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
         // Half-open extents assign each caret offset once. A newline owns
         // the caret before it, not the caret at the start of the next line.
         contains_caret := start <= sel_pos && sel_pos < end
@@ -376,7 +388,7 @@ display_command_gen :: proc(
         #partial switch sub in node.sub {
             case Node_Newline:
                 if emit != nil && !decorated {
-                    display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height)
+                    display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height, selected)
                 }
                 if contains_caret {
                     caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
@@ -384,6 +396,7 @@ display_command_gen :: proc(
                 }
                 draw_pos = {0, draw_pos.y + line_height}
                 decorated = false
+                row_line_start = end
                 // The parser classifies the next physical line on demand. At
                 // EOF, a trailing newline leaves an empty row in the fence (if open).
                 line_variant = p.fence_length != 0 ? .PRE : .BODY
@@ -461,7 +474,7 @@ display_command_gen :: proc(
 
                     if emit != nil {
                         if !decorated {
-                            display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height)
+                            display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height, selected)
                             decorated = true
                         }
                         color := theme.data.fg_color
@@ -540,15 +553,19 @@ display_command_gen :: proc(
         }
     }
 
-    if sel_pos == len(src) && (stop_y < 0 || draw_pos.y < stop_y) {
+    selected_empty_line := visual && row_line_start == len(src) && selected_lines[1] == len(src)
+    if (sel_pos == len(src) || selected_empty_line) && (stop_y < 0 || draw_pos.y < stop_y) {
         eof_line := p.line
         if p.line_start == len(src) do eof_line = {fenced = p.fence_length != 0}
         if emit != nil && !decorated {
-            display_emit_block_row(emit, emit_data, theme, eof_line, draw_pos.y, bounds_size.x, line_height)
+            selected := visual && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
+            display_emit_block_row(emit, emit_data, theme, eof_line, draw_pos.y, bounds_size.x, line_height, selected)
         }
-        inset := display_block_inset(theme, eof_line, bounds_size.x)
-        caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
-                                         {draw_pos.x + inset, draw_pos.y}, line_height)
+        if sel_pos == len(src) {
+            inset := display_block_inset(theme, eof_line, bounds_size.x)
+            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                                             {draw_pos.x + inset, draw_pos.y}, line_height)
+        }
     }
     if caret_rect.height <= 0 do return caret_rect
     if cursor_glyph.text != "" && caret_rect.x < bounds_size.x {

@@ -54,6 +54,8 @@ main :: proc() {
 
     editor_init(&ed)
     defer editor_destroy(&ed)
+    ed.state.set_clipboard = editor_system_clipboard_set
+    ed.state.get_clipboard = editor_system_clipboard_get
 
     kr := Key_Repeat_State{}
     keys := make([dynamic]rl.KeyboardKey, 0, 16)
@@ -95,8 +97,8 @@ main :: proc() {
             append(&chars, ch)
         }
         shortcut_repeated := false
-        if len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods) {
-            shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .E, .F, .R, .W}
+        if len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods || command_down) {
+            shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .C, .E, .F, .R, .V, .W}
             for key in shortcut_keys {
                 if rl.IsKeyPressedRepeat(key) && live_editor_shortcut_suppresses_chars(ed.mode, key, key_mods, command_down) {
                     shortcut_repeated = true
@@ -111,7 +113,8 @@ main :: proc() {
         repeat_mods := live_editor_key_mods(key_mods, command_down)
         for key in rl.KeyboardKey {
             if !kr.keys[key].is_pressed || editor_is_modifier_key(key) ||
-                live_editor_consumes_key(key, key_mods, command_down) {
+                live_editor_consumes_key(key, key_mods, command_down) ||
+                key == .V || (key == .P && ed.mode != .INSERT && ed.mode != .COMMAND) {
                 continue
             }
             repeat_key_held = true
@@ -230,6 +233,11 @@ live_editor_shortcut_suppresses_chars :: proc(
     mode: Editor_Mode, key: rl.KeyboardKey, mods: Editor_Key_Mod_State, command_down: bool,
 ) -> bool {
     if .CTRL in mods && live_zoom_shortcut_delta(key, mods, command_down) != 0 do return true
+    key_mods := live_editor_key_mods(mods, command_down)
+    if .CTRL in key_mods || .CMD in key_mods {
+        if key == .V && mode != .COMMAND do return true
+        if key == .C && mode == .VISUAL do return true
+    }
     if mode == .NORMAL do return key == .R && .CTRL in mods
     _, shortcut := editor_text_letter_shortcut(key, mods)
     return shortcut
