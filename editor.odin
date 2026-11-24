@@ -137,7 +137,7 @@ editor_loc_to_byte_index :: proc(loc: Editor_Loc, buf: []byte) -> int {
     return byte_idx + min(loc.col, max_col)
 }
 
-editor_init :: proc(ed: ^Editor) {
+editor_init :: proc(ed: ^Editor, system_clipboard := false) {
     te.init(
         &ed.state,
         context.allocator,
@@ -145,6 +145,10 @@ editor_init :: proc(ed: ^Editor) {
         // Opal owns undo. Suppress text/edit's additional full-buffer snapshots.
         undo_timeout = max(time.Duration),
     )
+    if system_clipboard {
+        ed.state.set_clipboard = editor_system_clipboard_set
+        ed.state.get_clipboard = editor_system_clipboard_get
+    }
 
     ed.sb = strings.builder_make()
     ed.command = strings.builder_make()
@@ -166,6 +170,12 @@ editor_set_filename :: proc(ed: ^Editor, str: string) {
 }
 
 editor_destroy :: proc(ed: ^Editor) {
+    for item in ed.undos do delete(item.data)
+    for item in ed.redos do delete(item.data)
+    for tracker in ed.undo_trackers do delete(tracker.orig_data)
+    delete(ed.undos)
+    delete(ed.redos)
+    delete(ed.undo_trackers)
     strings.builder_destroy(&ed.sb)
     strings.builder_destroy(&ed.command)
     strings.builder_destroy(&ed.filename)
@@ -643,7 +653,7 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
             }
 
             if key == .ESCAPE && ed.canvas != nil {
-                ed.canvas.finish_card = true
+                ed.canvas.finish_editing = true
                 break
             }
 
@@ -906,8 +916,7 @@ editor_handle_charpress :: proc(ed: ^Editor, ch: rune) {
         }
 
         case .INSERT: {
-            // TODO(Apaar): Allow non-ascii input
-            if !is_ascii(ch) {
+            if ch < ' ' || ch == 127 {
                 break
             }
 

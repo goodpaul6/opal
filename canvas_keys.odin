@@ -141,19 +141,14 @@ canvas_select_in_direction :: proc(board: ^Canvas, direction: [2]i32, size: [2]f
     }
 }
 
-canvas_adjacent_card :: proc(board: ^Canvas, from: int, side: Canvas_Side, size: [2]f32) -> [2]f32 {
-    if from == 0 {
-        return (canvas_view_center(size) - board.pan) / board.zoom - [2]f32{CANVAS_CARD_W / 2, CANVAS_CARD_H / 2}
-    }
+canvas_adjacent_card :: proc(board: ^Canvas, from: int, side: Canvas_Side) -> [2]f32 {
     nodes := canvas_items(board, "nodes")
     source := canvas_node_rect(nodes[from - 1].(json.Object))
-    card := rl.Rectangle{source.x, source.y, CANVAS_CARD_W, CANVAS_CARD_H}
-    switch side {
-        case .TOP: card.y -= CANVAS_CARD_GAP + card.height
-        case .BOTTOM: card.y += source.height + CANVAS_CARD_GAP
-        case .LEFT: card.x -= CANVAS_CARD_GAP + card.width
-        case .RIGHT: card.x += source.width + CANVAS_CARD_GAP
-    }
+    grid := f32(canvas_grid_step(board.zoom))
+    origin := canvas_round_to_grid({source.x, source.y}, grid)
+    dimensions := canvas_new_card_size(board.zoom)
+    card := rl.Rectangle{origin.x, origin.y, dimensions.x, dimensions.y}
+    canvas_place_beside(&card, source, side, grid)
     // Advance past an occupied slot while keeping the card in the same lane.
     for {
         blocked := false
@@ -161,29 +156,62 @@ canvas_adjacent_card :: proc(board: ^Canvas, from: int, side: Canvas_Side, size:
             other := canvas_node_rect(item.(json.Object))
             if !rl.CheckCollisionRecs(card, other) do continue
             blocked = true
-            switch side {
-                case .TOP: card.y = other.y - CANVAS_CARD_GAP - card.height
-                case .BOTTOM: card.y = other.y + other.height + CANVAS_CARD_GAP
-                case .LEFT: card.x = other.x - CANVAS_CARD_GAP - card.width
-                case .RIGHT: card.x = other.x + other.width + CANVAS_CARD_GAP
-            }
+            canvas_place_beside(&card, other, side, grid)
         }
         if !blocked do return {card.x, card.y}
     }
+}
+
+canvas_place_beside :: proc(card: ^rl.Rectangle, other: rl.Rectangle, side: Canvas_Side, grid: f32) {
+    switch side {
+        case .TOP: card.y = math.floor((other.y - CANVAS_CARD_GAP - card.height) / grid) * grid
+        case .BOTTOM: card.y = math.ceil((other.y + other.height + CANVAS_CARD_GAP) / grid) * grid
+        case .LEFT: card.x = math.floor((other.x - CANVAS_CARD_GAP - card.width) / grid) * grid
+        case .RIGHT: card.x = math.ceil((other.x + other.width + CANVAS_CARD_GAP) / grid) * grid
+    }
+}
+
+canvas_round_to_grid :: proc(point: [2]f32, step: f32) -> [2]f32 {
+    return {math.round(point.x / step) * step, math.round(point.y / step) * step}
+}
+
+canvas_new_card_size :: proc(zoom: f32) -> [2]f32 {
+    grid := f32(canvas_grid_step(zoom))
+    dimensions := canvas_round_to_grid({CANVAS_CARD_W, CANVAS_CARD_H}, grid)
+    return {max(grid, dimensions.x), max(grid, dimensions.y)}
+}
+
+canvas_insert_first_card :: proc(board: ^Canvas, size: [2]f32) -> int {
+    grid := f32(canvas_grid_step(board.zoom))
+    dim := canvas_new_card_size(board.zoom)
+    center := canvas_view_center(size)
+    corner := canvas_round_to_grid((center - board.pan) / board.zoom - dim / 2, grid)
+    index := canvas_add_card(board, i64(corner.x), i64(corner.y))
+
+    // Keep the board's upper-left edge on the grid, as close to centered as possible.
+    view_top := [2]f32{0, CANVAS_BAR}
+    pan := center - (corner + dim / 2) * board.zoom
+    board.pan = view_top + canvas_round_to_grid(pan - view_top, grid * board.zoom)
+    board.fit = false
+    return index
 }
 
 canvas_open_adjacent :: proc(board: ^Canvas, ed: ^Editor, side: Canvas_Side, size: [2]f32) {
     if board.selected == 0 do canvas_select_in_direction(board, {}, size)
     connect := board.connect_from
     from := connect if connect != 0 else board.selected
-    point := canvas_adjacent_card(board, from, side, size)
-    source_side := board.connect_source_side.? or_else side
-    opposite := Canvas_Side((int(side) + 2) % 4)
-    target_side := board.connect_target_side.? or_else opposite
-    board.selected = canvas_add_card(board, i64(math.round(point.x)), i64(math.round(point.y)), connect, source_side, target_side)
+    if from == 0 {
+        board.selected = canvas_insert_first_card(board, size)
+    } else {
+        point := canvas_adjacent_card(board, from, side)
+        source_side := board.connect_source_side.? or_else side
+        opposite := Canvas_Side((int(side) + 2) % 4)
+        target_side := board.connect_target_side.? or_else opposite
+        board.selected = canvas_add_card(board, i64(math.round(point.x)), i64(math.round(point.y)), connect, source_side, target_side)
+        canvas_reveal_node(board, board.selected, size)
+    }
     board.selected_edge = 0
     board.key_mode, board.connect_from = .NORMAL, 0
-    canvas_reveal_node(board, board.selected, size)
     canvas_edit_card(board, ed, board.selected, true)
 }
 
@@ -331,9 +359,9 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
     #partial switch key {
         case .I, .ENTER:
             if board.selected != 0 do canvas_edit_card(board, ed, board.selected, insert = key == .I)
-            else if key == .ENTER && board.selected_edge != 0 {
+            else if board.selected_edge != 0 {
                 canvas_reveal_edge(board, size)
-                canvas_label_prompt(board)
+                canvas_edit_edge(board, ed, board.selected_edge)
             }
             else if key == .I && len(canvas_items(board, "nodes")) == 0 do canvas_open_adjacent(board, ed, .RIGHT, size)
         case .G: board.key_mode = .G_PREFIX

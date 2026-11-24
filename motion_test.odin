@@ -93,13 +93,6 @@ test_editor_word_delete_and_undo :: proc(t: ^testing.T) {
         ed: Editor
         editor_init(&ed)
         defer editor_destroy(&ed)
-        defer {
-            for item in ed.undos do delete(item.data)
-            for item in ed.redos do delete(item.data)
-            delete(ed.undos)
-            delete(ed.redos)
-            delete(ed.undo_trackers)
-        }
         strings.write_string(&ed.sb, c.text)
         ed.prev_frame_sel = {c.start, c.start}
         editor_begin_frame(&ed)
@@ -151,7 +144,7 @@ test_editor_changes_keep_replacement_in_one_undo_step :: proc(t: ^testing.T) {
     for c in cases {
         ed: Editor
         editor_init(&ed)
-        defer test_clipboard_destroy_editor(&ed)
+        defer editor_destroy(&ed)
         strings.write_string(&ed.sb, c.before)
         ed.prev_frame_sel = {c.offset, c.offset}
         editor_begin_frame(&ed)
@@ -175,7 +168,7 @@ test_editor_changes_keep_replacement_in_one_undo_step :: proc(t: ^testing.T) {
 test_editor_change_cancel_and_visual_line_change :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
-    defer test_clipboard_destroy_editor(&ed)
+    defer editor_destroy(&ed)
     strings.write_string(&ed.sb, "one\ntwo\nlast")
     editor_begin_frame(&ed)
     defer editor_end_frame(&ed)

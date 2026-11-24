@@ -18,22 +18,11 @@ set_test_clipboard :: proc(ed: ^Editor, clip: ^strings.Builder) {
     }
 }
 
-@(private="package")
-test_clipboard_destroy_editor :: proc(ed: ^Editor) {
-    for item in ed.undos do delete(item.data)
-    for item in ed.redos do delete(item.data)
-    for tracker in ed.undo_trackers do delete(tracker.orig_data)
-    delete(ed.undos)
-    delete(ed.redos)
-    delete(ed.undo_trackers)
-    editor_destroy(ed)
-}
-
 @(test)
 test_visual_line_yank_and_linewise_put :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
-    defer test_clipboard_destroy_editor(&ed)
+    defer editor_destroy(&ed)
     clip := strings.builder_make()
     defer strings.builder_destroy(&clip)
     set_test_clipboard(&ed, &clip)
@@ -73,7 +62,7 @@ test_visual_line_yank_and_linewise_put :: proc(t: ^testing.T) {
 test_clipboard_shortcuts_replace_visual_lines_and_paste_in_insert :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
-    defer test_clipboard_destroy_editor(&ed)
+    defer editor_destroy(&ed)
     clip := strings.builder_make()
     defer strings.builder_destroy(&clip)
     set_test_clipboard(&ed, &clip)
@@ -118,7 +107,7 @@ test_visual_d_cuts_whole_lines_and_can_be_undone :: proc(t: ^testing.T) {
     for c in cases {
         ed: Editor
         editor_init(&ed)
-        defer test_clipboard_destroy_editor(&ed)
+        defer editor_destroy(&ed)
         clip := strings.builder_make()
         defer strings.builder_destroy(&clip)
         set_test_clipboard(&ed, &clip)
@@ -145,7 +134,7 @@ test_visual_d_cuts_whole_lines_and_can_be_undone :: proc(t: ^testing.T) {
 test_keyboard_visual_selects_characters_in_both_directions :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
-    defer test_clipboard_destroy_editor(&ed)
+    defer editor_destroy(&ed)
     clip := strings.builder_make()
     defer strings.builder_destroy(&clip)
     set_test_clipboard(&ed, &clip)

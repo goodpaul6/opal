@@ -36,8 +36,6 @@ test_editor_status_updates_in_input_frame :: proc(t: ^testing.T) {
 
     testing.expect_value(t, editor_status_layout(&ed, &font, 500).label, "NORMAL")
     editor_handle_keypress(&ed, .I, {})
-    // Leaving insert mode clears the trackers but retains their backing array.
-    defer delete(ed.undo_trackers)
     testing.expect_value(t, editor_status_layout(&ed, &font, 500).label, "INSERT")
     editor_handle_keypress(&ed, .ESCAPE, {})
     testing.expect_value(t, editor_status_layout(&ed, &font, 500).label, "NORMAL")

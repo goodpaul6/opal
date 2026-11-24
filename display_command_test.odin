@@ -350,7 +350,7 @@ test_mouse_drag_selects_exact_utf8_and_uses_visual_commands :: proc(t: ^testing.
     theme := make_display_test_theme(&data)
     ed: Editor
     editor_init(&ed)
-    defer test_clipboard_destroy_editor(&ed)
+    defer editor_destroy(&ed)
     clip := strings.builder_make()
     defer strings.builder_destroy(&clip)
     set_test_clipboard(&ed, &clip)
@@ -725,4 +725,33 @@ test_display_fractional_pairs_across_tokens_and_rows :: proc(t: ^testing.T) {
     testing.expect_value(t, cmds[3].previous, 'A')     // Still PRE.
     testing.expect_value(t, cmds[4].previous, rune(0)) // PRE -> BODY.
     testing.expect_value(t, rect, rl.Rectangle{20, 0, INSERT_CARET_W, 10})
+}
+
+@(test)
+test_canvas_label_uses_widest_line_and_tracks_caret_row :: proc(t: ^testing.T) {
+    data := Theme_Data{line_spacing = 1}
+    theme := make_display_test_theme(&data)
+    bounds := canvas_edge_label_rect(&theme, "aaa\né", {200, 160}, 2)
+    testing.expect_value(t, bounds, rl.Rectangle{170, 130, 60, 60})
+
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    a := canvas_add_card(&board, 20, 100)
+    b := canvas_add_card(&board, 400, 100)
+    canvas_connect(&board, a, b, .RIGHT, .LEFT)
+    board.selected_edge = 1
+    ed: Editor
+    canvas_edit_edge(&board, &ed, 1)
+    defer canvas_finish_editing(&board, &ed)
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    editor_insert_text(&ed, "aaa\né\n")
+    screen := [2]f32{800, 450}
+    testing.expect_value(t, canvas_label_editor_rect(&board, &ed, &theme, screen).height, f32(44))
+    canvas_inline_editor_begin(&board, &ed, &theme, screen)
+    caret := display_command_gen(&ed, &theme, ed.display.layout_size)
+    testing.expect_value(t, [2]f32{caret.x, caret.y}, [2]f32{0, 20})
+    editor_mouse_select(&ed, &theme, {ed.display.bounds.x + 1, ed.display.bounds.y + 11}, true, true, false)
+    testing.expect_value(t, ed.state.selection[0], 4)
 }

@@ -33,13 +33,14 @@ Canvas_History :: struct {
 }
 CANVAS_HISTORY_LIMIT :: 32
 
-Canvas_Prompt :: enum { NONE, OPEN, SAVE, CLOSE, EDGE_LABEL }
+Canvas_Prompt :: enum { NONE, OPEN, SAVE, CLOSE }
 Canvas_Drag :: enum { NONE, PAN, MOVE, RESIZE, CONNECT }
 Canvas_Key_Mode :: enum { NORMAL, MOVE, RESIZE, CONNECT, G_PREFIX }
 Canvas_Side :: enum { TOP, RIGHT, BOTTOM, LEFT }
 CANVAS_SIDES :: [Canvas_Side]string{.TOP = "top", .RIGHT = "right", .BOTTOM = "bottom", .LEFT = "left"}
-CANVAS_CARD_W :: 252
-CANVAS_CARD_H :: 144
+CANVAS_GRID_STEP :: 28
+CANVAS_CARD_W :: 9 * CANVAS_GRID_STEP
+CANVAS_CARD_H :: 5 * CANVAS_GRID_STEP
 
 Canvas :: struct {
     current: Canvas_Version,
@@ -50,7 +51,8 @@ Canvas :: struct {
     node_indices: map[string]int,
 
     selected, selected_edge, editing: int, // One-based indices. Zero means no selection.
-    expanded, finish_card, finish_after_save: bool,
+    editing_edge: int,
+    expanded, finish_editing, finish_after_save: bool,
     exit_requested, close_after_save: bool,
 
     pan: [2]f32,
@@ -256,15 +258,18 @@ canvas_new_id :: proc(board: ^Canvas) -> string {
     }
 }
 
-canvas_add_card :: proc(board: ^Canvas, x, y: i64, from := 0, from_side: Canvas_Side = .RIGHT, to_side: Canvas_Side = .LEFT) -> int {
+canvas_add_card :: proc(
+    board: ^Canvas, x, y: i64, from := 0, from_side: Canvas_Side = .RIGHT, to_side: Canvas_Side = .LEFT,
+) -> int {
     canvas_record_undo(board, Canvas_Append{collection = "nodes", with_edge = from != 0})
     card := make(json.Object)
     canvas_set(&card, "id", canvas_new_id(board))
     canvas_set(&card, "type", strings.clone("text"))
     canvas_set(&card, "x", x)
     canvas_set(&card, "y", y)
-    canvas_set(&card, "width", i64(CANVAS_CARD_W))
-    canvas_set(&card, "height", i64(CANVAS_CARD_H))
+    dimensions := canvas_new_card_size(board.zoom)
+    canvas_set(&card, "width", i64(dimensions.x))
+    canvas_set(&card, "height", i64(dimensions.y))
     canvas_set(&card, "text", "")
     canvas_append(board, "nodes", card)
     index := len(canvas_items(board, "nodes"))
@@ -290,13 +295,6 @@ canvas_append_edge :: proc(board: ^Canvas, from, to: int, from_side, to_side: Ca
     canvas_set(&edge, "fromSide", strings.clone(sides[from_side]))
     canvas_set(&edge, "toSide", strings.clone(sides[to_side]))
     canvas_append(board, "edges", edge)
-}
-
-canvas_set_edge_label :: proc(board: ^Canvas, index: int, label: string) {
-    edge := canvas_items(board, "edges")[index - 1].(json.Object)
-    if label == canvas_string(edge, "label") do return
-    canvas_push_undo(board)
-    canvas_set(&edge, "label", strings.clone(label))
 }
 
 canvas_remove_selected :: proc(board: ^Canvas) {
@@ -479,51 +477,72 @@ canvas_active_card :: proc(board: ^Canvas) -> json.Object {
     return canvas_items(board, "nodes")[board.editing - 1].(json.Object)
 }
 
+canvas_editor_active :: proc(board: ^Canvas) -> bool {
+    return board.editing != 0 || board.editing_edge != 0
+}
+
+canvas_editor_target :: proc(board: ^Canvas) -> (json.Object, string) {
+    if board.editing_edge != 0 {
+        return canvas_items(board, "edges")[board.editing_edge - 1].(json.Object), "label"
+    }
+    if board.editing != 0 do return canvas_active_card(board), "text"
+    return nil, ""
+}
+
 canvas_dirty :: proc(board: ^Canvas, ed: ^Editor) -> bool {
-    return board.current.revision != board.saved_revision ||
-           (board.editing != 0 && editor_get_text(ed) != canvas_string(canvas_active_card(board), "text"))
+    if board.current.revision != board.saved_revision do return true
+    item, field := canvas_editor_target(board)
+    return item != nil && editor_get_text(ed) != canvas_string(item, field)
+}
+
+canvas_begin_editor :: proc(board: ^Canvas, ed: ^Editor, text: string, insert: bool, caret := 0) {
+    ed^ = {}
+    editor_init(ed, system_clipboard = true)
+    ed.canvas = board
+    strings.write_string(&ed.sb, text)
+    ed.state.selection, ed.prev_frame_sel = {caret, caret}, {caret, caret}
+    if insert {
+        ed.mode = .INSERT
+        track_text_and_pos(ed)
+    }
+    board.expanded = false
+    board.message = ""
 }
 
 canvas_edit_card :: proc(board: ^Canvas, ed: ^Editor, index: int, insert := false) {
     card := canvas_items(board, "nodes")[index - 1].(json.Object)
     if canvas_string(card, "type") != "text" do return
-    ed^ = {}
-    editor_init(ed)
-    ed.state.set_clipboard = editor_system_clipboard_set
-    ed.state.get_clipboard = editor_system_clipboard_get
-    ed.canvas = board
-    strings.write_string(&ed.sb, canvas_string(card, "text"))
-    if insert {
-        ed.mode = .INSERT
-        track_text_and_pos(ed)
-    }
+    canvas_begin_editor(board, ed, canvas_string(card, "text"), insert)
     board.editing = index
-    board.expanded = false
-    board.message = ""
 }
 
-canvas_commit_card :: proc(board: ^Canvas, ed: ^Editor) {
-    if board.editing == 0 do return
-    card := canvas_active_card(board)
+canvas_edit_edge :: proc(board: ^Canvas, ed: ^Editor, index: int) {
+    edge := canvas_items(board, "edges")[index - 1].(json.Object)
+    if board.node_indices[canvas_string(edge, "fromNode")] == 0 ||
+       board.node_indices[canvas_string(edge, "toNode")] == 0 {
+        return
+    }
+    label := canvas_string(edge, "label")
+    canvas_begin_editor(board, ed, label, true, len(label))
+    board.editing_edge = index
+}
+
+canvas_commit_editor :: proc(board: ^Canvas, ed: ^Editor) {
+    item, field := canvas_editor_target(board)
+    if item == nil do return
     text := editor_get_text(ed)
-    if text == canvas_string(card, "text") do return
+    if text == canvas_string(item, field) do return
     canvas_push_undo(board)
-    canvas_set(&card, "text", strings.clone(text))
+    canvas_set(&item, field, strings.clone(text))
 }
 
-canvas_finish_card :: proc(board: ^Canvas, ed: ^Editor) {
-    canvas_commit_card(board, ed)
-    for item in ed.undos do delete(item.data)
-    for item in ed.redos do delete(item.data)
-    for tracker in ed.undo_trackers do delete(tracker.orig_data)
-    delete(ed.undos)
-    delete(ed.redos)
-    delete(ed.undo_trackers)
+canvas_finish_editing :: proc(board: ^Canvas, ed: ^Editor) {
+    canvas_commit_editor(board, ed)
     editor_destroy(ed)
     ed^ = {}
-    board.editing = 0
+    board.editing, board.editing_edge = 0, 0
     board.expanded = false
-    board.finish_card = false
+    board.finish_editing = false
 }
 
 canvas_begin_prompt :: proc(board: ^Canvas, prompt: Canvas_Prompt) {
@@ -539,13 +558,13 @@ canvas_begin_prompt :: proc(board: ^Canvas, prompt: Canvas_Prompt) {
 canvas_complete_save :: proc(board: ^Canvas) {
     board.prompt = .NONE
     if board.close_after_save do board.exit_requested = true
-    if board.finish_after_save do board.finish_card = true
+    if board.finish_after_save do board.finish_editing = true
     board.finish_after_save = false
 }
 
-canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_card := false) {
-    canvas_commit_card(board, ed)
-    board.finish_after_save = finish_card
+canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_editing := false) {
+    canvas_commit_editor(board, ed)
+    board.finish_after_save = finish_editing
     if board.filename == "" {
         canvas_begin_prompt(board, .SAVE)
     } else if canvas_save(board, board.filename) {
@@ -558,16 +577,16 @@ canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_card := false) {
 canvas_card_command :: proc(board: ^Canvas, ed: ^Editor, cmd: ^Command) -> bool {
     switch c in cmd {
         case Command_Quit:
-            board.finish_card = true
+            board.finish_editing = true
             return true
         case Command_Write:
             if c.filename == "" {
-                canvas_request_save(board, ed, finish_card = c.quit)
+                canvas_request_save(board, ed, finish_editing = c.quit)
                 return true
             }
-            canvas_commit_card(board, ed)
+            canvas_commit_editor(board, ed)
             if canvas_save(board, c.filename) {
-                board.finish_card = c.quit
+                board.finish_editing = c.quit
                 return true
             }
         case Command_Edit:

@@ -78,11 +78,6 @@ test_open_line_below_or_above_current_line :: proc(t: ^testing.T) {
         ed: Editor
         editor_init(&ed)
         defer editor_destroy(&ed)
-        defer {
-            for item in ed.undos do delete(item.data)
-            delete(ed.undo_trackers)
-            delete(ed.undos)
-        }
         strings.write_string(&ed.sb, c.before)
         ed.prev_frame_sel = {c.caret, c.caret}
         editor_begin_frame(&ed)
@@ -100,13 +95,6 @@ test_redo_shortcut_survives_navigation_and_empty_insert :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
     defer editor_destroy(&ed)
-    defer {
-        for item in ed.undos do delete(item.data)
-        for item in ed.redos do delete(item.data)
-        delete(ed.undo_trackers)
-        delete(ed.undos)
-        delete(ed.redos)
-    }
     strings.write_string(&ed.sb, "abc")
     ed.prev_frame_sel = {1, 1}
     editor_begin_frame(&ed)
@@ -144,13 +132,6 @@ test_insert_word_shortcuts_preserve_utf8_and_undo :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
     defer editor_destroy(&ed)
-    defer {
-        for item in ed.undos do delete(item.data)
-        for item in ed.redos do delete(item.data)
-        delete(ed.undo_trackers)
-        delete(ed.undos)
-        delete(ed.redos)
-    }
     src :: "one café.test"
     strings.write_string(&ed.sb, src)
     ed.prev_frame_sel = {len(src), len(src)}
@@ -306,13 +287,6 @@ test_editor_list_enter_undo_batch :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
     defer editor_destroy(&ed)
-    defer {
-        for item in ed.undos do delete(item.data)
-        for item in ed.redos do delete(item.data)
-        delete(ed.undos)
-        delete(ed.redos)
-        delete(ed.undo_trackers)
-    }
 
     strings.write_string(&ed.sb, "- first")
     ed.prev_frame_sel = {7, 7}

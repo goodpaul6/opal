@@ -65,9 +65,7 @@ main :: proc() {
         canvas_init(&board)
         if path != "" do canvas_open(&board, path)
     } else {
-        editor_init(&ed)
-        ed.state.set_clipboard = editor_system_clipboard_set
-        ed.state.get_clipboard = editor_system_clipboard_get
+        editor_init(&ed, system_clipboard = true)
         if path != "" && path != "--markdown" {
             cmd := Command(Command_Edit{path})
             if !command_run(&cmd, &ed) do fmt.eprintln("Could not open", path)
@@ -75,7 +73,7 @@ main :: proc() {
     }
     defer {
         if canvas_mode {
-            if board.editing != 0 do canvas_finish_card(&board, &ed)
+            if canvas_editor_active(&board) do canvas_finish_editing(&board, &ed)
             canvas_destroy(&board)
         } else {
             editor_destroy(&ed)
@@ -94,12 +92,11 @@ main :: proc() {
     for !ed.exit_requested && !board.exit_requested {
         closing := rl.WindowShouldClose()
         if closing {
-            if canvas_mode && board.prompt == .EDGE_LABEL do canvas_finish_label(&board)
             if !canvas_mode || !canvas_dirty(&board, &ed) do break
             if board.prompt != .CLOSE do canvas_begin_prompt(&board, .CLOSE)
         }
-        finished_card := board.finish_card
-        if finished_card do canvas_finish_card(&board, &ed)
+        finished_editing := board.finish_editing
+        if finished_editing do canvas_finish_editing(&board, &ed)
         input_tick: time.Tick
         when OPAL_TRACE_INPUT do input_tick = time.tick_now()
         frame_time := rl.GetTime()
@@ -143,11 +140,11 @@ main :: proc() {
                 canvas_changed = true
             }
         }
-        note_open := !canvas_mode || board.editing != 0
+        note_open := !canvas_mode || canvas_editor_active(&board)
         if note_open do editor_begin_frame(&ed)
         defer if note_open do editor_end_frame(&ed)
-        if canvas_mode && board.editing != 0 && !board.expanded {
-            editor_display_begin(&ed, &theme, canvas_card_content(canvas_active_card(&board)), board.zoom, board.pan)
+        if canvas_mode && canvas_editor_active(&board) && !board.expanded {
+            canvas_inline_editor_begin(&board, &ed, &theme, {f32(frame_size[0]), f32(frame_size[1])})
         }
         mouse_selection := false
         if !canvas_consumed {
@@ -176,6 +173,10 @@ main :: proc() {
             if !kr.keys[key].is_pressed || editor_is_modifier_key(key) do continue
             if canvas_mode {
                 if delta := canvas_zoom_key_delta(&board, key, repeat_mods); delta != 0 {
+                    if (delta > 0 && board.zoom >= CANVAS_MAX_ZOOM) ||
+                       (delta < 0 && board.zoom <= CANVAS_MIN_ZOOM) {
+                        continue
+                    }
                     repeat_key_held = true
                     if key_repeat_should_repeat(&kr, key, frame_time, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS) &&
                        canvas_zoom_at(&board, canvas_view_center(canvas_screen), f32(delta), frame_time) {
@@ -185,7 +186,7 @@ main :: proc() {
                 }
             }
             if canvas_consumed {
-                if canvas_mode && board.editing == 0 && board.prompt == .NONE && board.drag == .NONE &&
+                if canvas_mode && !canvas_editor_active(&board) && board.prompt == .NONE && board.drag == .NONE &&
                    board.key_mode != .G_PREFIX && repeat_mods - {.SHIFT} == {} &&
                    !(board.key_mode == .CONNECT && .SHIFT in repeat_mods) &&
                    canvas_key_direction(key, board.key_mode, repeat_mods) != {} {
@@ -216,7 +217,7 @@ main :: proc() {
             cursor = next_cursor
         }
         has_input := has_key_input || len(chars) > 0 || repeats > 0 || mouse_selection ||
-                     canvas_changed || finished_card || closing
+                     canvas_changed || finished_editing || closing
         wake_needs_redraw := redraw_after_wait && len(keys) == 0
         if !has_input && !wake_needs_redraw && frame_size == drawn_size && !rl.IsWindowResized() {
             free_all(context.temp_allocator)

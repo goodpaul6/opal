@@ -3,7 +3,6 @@ package main
 import "core:encoding/json"
 import "core:mem"
 import "core:os"
-import "core:strings"
 import "core:testing"
 import rl "vendor:raylib"
 
@@ -23,17 +22,23 @@ test_canvas_markdown_cards_round_trip :: proc(t: ^testing.T) {
 
     ed: Editor
     board.selected_edge = 1
-    canvas_label_prompt(&board)
+    canvas_edit_edge(&board, &ed, 1)
+    testing.expect_value(t, board.editing_edge, 1)
+    testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
+    editor_begin_frame(&ed)
     label := [?]rune{'C', 'a', 'f', 'é'}
-    canvas_prompt_input(&board, &ed, {.ENTER}, label[:], false)
-    testing.expect_value(t, board.prompt, Canvas_Prompt.NONE)
+    for ch in label do editor_handle_charpress(&ed, ch)
+    editor_handle_keypress(&ed, .ENTER, {})
+    editor_handle_charpress(&ed, '2')
+    editor_end_frame(&ed)
+    canvas_finish_editing(&board, &ed)
     canvas_step_history(&board, false)
     testing.expect_value(t, canvas_string(canvas_items(&board, "edges")[0].(json.Object), "label"), "")
     canvas_step_history(&board, true)
 
     canvas_edit_card(&board, &ed, first, true)
     testing.expect(t, !board.expanded)
-    testing.expect_value(t, canvas_editor_bounds(&board), rl.Rectangle{-110, 59, 232, 126})
+    testing.expect_value(t, canvas_editor_bounds(&board), rl.Rectangle{-110, 59, CANVAS_CARD_W - 20, CANVAS_CARD_H - 18})
     editor_begin_frame(&ed)
     editor_insert_text(&ed, "# Outline\n\nA **draft** with café.\n")
     caret := ed.state.selection
@@ -49,7 +54,7 @@ test_canvas_markdown_cards_round_trip :: proc(t: ^testing.T) {
     editor_handle_keypress(&ed, .R, {.CTRL})
     editor_end_frame(&ed)
     testing.expect(t, canvas_dirty(&board, &ed))
-    canvas_finish_card(&board, &ed)
+    canvas_finish_editing(&board, &ed)
 
     if !testing.expect(t, canvas_save(&board, path)) do return
     testing.expect(t, !canvas_dirty(&board, &ed))
@@ -65,18 +70,21 @@ test_canvas_markdown_cards_round_trip :: proc(t: ^testing.T) {
     testing.expect_value(t, canvas_string(nodes[1].(json.Object), "text"), "")
     testing.expect_value(t, canvas_string(edges[0].(json.Object), "toNode"),
                          canvas_string(nodes[1].(json.Object), "id"))
-    testing.expect_value(t, canvas_string(edges[0].(json.Object), "label"), "Café")
+    testing.expect_value(t, canvas_string(edges[0].(json.Object), "label"), "Café\n2")
     loaded.selected_edge = 1
-    canvas_label_prompt(&loaded)
-    testing.expect_value(t, strings.to_string(loaded.prompt_text), "Café")
-    canvas_prompt_input(&loaded, &ed, {.A}, {}, true)
-    canvas_prompt_input(&loaded, &ed, {.BACKSPACE, .ENTER}, {}, false)
+    canvas_edit_edge(&loaded, &ed, 1)
+    testing.expect_value(t, editor_get_text(&ed), "Café\n2")
+    editor_begin_frame(&ed)
+    ed.state.selection = {0, len(ed.sb.buf)}
+    editor_delete_selection(&ed)
+    editor_end_frame(&ed)
+    canvas_finish_editing(&loaded, &ed)
     testing.expect_value(t, canvas_string(edges[0].(json.Object), "label"), "")
     canvas_step_history(&loaded, false)
     canvas_edit_card(&loaded, &ed, first)
     testing.expect_value(t, ed.mode, Editor_Mode.NORMAL)
     testing.expect_value(t, editor_get_text(&ed), "# Outline\n\nA **draft** with café.\n")
-    canvas_finish_card(&loaded, &ed)
+    canvas_finish_editing(&loaded, &ed)
 
     loaded.selected = second
     testing.expect(t, canvas_keyboard_key(&loaded, &ed, .D, {}, {800, 450}))
@@ -184,21 +192,44 @@ test_canvas_keyboard_opens_inline_or_expanded :: proc(t: ^testing.T) {
     canvas_init(&board)
     defer canvas_destroy(&board)
     ed: Editor
-    defer if board.editing != 0 do canvas_finish_card(&board, &ed)
+    defer if board.editing != 0 do canvas_finish_editing(&board, &ed)
 
-    testing.expect(t, canvas_keyboard_key(&board, &ed, .I, {}, {800, 450}))
+    screen := [2]f32{800, 450}
+    board.zoom, board.pan = 0.5, {401.5, 237.25}
+    testing.expect(t, canvas_keyboard_key(&board, &ed, .I, {}, screen))
     testing.expect_value(t, len(canvas_items(&board, "nodes")), 1)
     testing.expect_value(t, board.selected, 1)
     testing.expect_value(t, board.editing, 1)
     testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
     testing.expect(t, !board.expanded)
+    testing.expect_value(t, board.zoom, f32(0.5))
+    grid := canvas_grid_step(board.zoom)
+    node := canvas_active_card(&board)
+    for key in ([?]string{"x", "y", "width", "height"}) {
+        testing.expect_value(t, node[key].(json.Integer) %% grid, i64(0))
+    }
+    screen_step := f32(grid) * board.zoom
+    view_grid := (board.pan - [2]f32{0, CANVAS_BAR}) / screen_step
+    testing.expect_value(t, view_grid, canvas_round_to_grid(view_grid, 1))
+    offset := canvas_center(canvas_rect(&board, node)) - canvas_view_center(screen)
+    testing.expect(t, abs(offset.x) <= screen_step / 2 && abs(offset.y) <= screen_step / 2)
 
-    canvas_finish_card(&board, &ed)
+    canvas_finish_editing(&board, &ed)
     testing.expect(t, canvas_keyboard_key(&board, &ed, .ENTER, {.CMD, .SHIFT}, {800, 450}))
     testing.expect_value(t, len(canvas_items(&board, "nodes")), 1)
     testing.expect_value(t, board.editing, 1)
     testing.expect_value(t, ed.mode, Editor_Mode.NORMAL)
     testing.expect(t, board.expanded)
+
+    canvas_finish_editing(&board, &ed)
+    testing.expect(t, canvas_keyboard_key(&board, &ed, .A, {}, screen))
+    testing.expect_value(t, board.editing, 2)
+    right := canvas_node_rect(canvas_active_card(&board))
+    first := canvas_node_rect(node)
+    testing.expect_value(t, right.y, first.y)
+    testing.expect_value(t, [2]f32{right.width, right.height}, [2]f32{first.width, first.height})
+    testing.expect_value(t, i64(right.x) %% grid, i64(0))
+    testing.expect(t, right.x > first.x + first.width)
 }
 
 @(test)
@@ -291,16 +322,16 @@ test_canvas_keyboard_creates_and_connects_markdown_cards :: proc(t: ^testing.T) 
     testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
     nodes := canvas_items(&board, "nodes")
     above := nodes[1].(json.Object)
-    testing.expect_value(t, canvas_coord(above, "x"), f32(50))
-    testing.expect_value(t, canvas_coord(above, "y"), f32(200 - CANVAS_CARD_H - CANVAS_CARD_GAP))
+    testing.expect_value(t, canvas_coord(above, "x"), f32(56))
+    testing.expect_value(t, canvas_coord(above, "y"), f32(0))
 
     editor_begin_frame(&ed)
     editor_handle_keypress(&ed, .ESCAPE, {})
-    testing.expect(t, !board.finish_card)
+    testing.expect(t, !board.finish_editing)
     editor_handle_keypress(&ed, .ESCAPE, {})
-    testing.expect(t, board.finish_card)
+    testing.expect(t, board.finish_editing)
     editor_end_frame(&ed)
-    canvas_finish_card(&board, &ed)
+    canvas_finish_editing(&board, &ed)
     canvas_keyboard_key(&board, &ed, .J, {}, size)
     testing.expect_value(t, board.selected, root)
     canvas_keyboard_key(&board, &ed, .G, {}, size)
@@ -310,14 +341,14 @@ test_canvas_keyboard_creates_and_connects_markdown_cards :: proc(t: ^testing.T) 
     canvas_keyboard_key(&board, &ed, .A, {}, size)
     testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
     testing.expect_value(t, board.key_mode, Canvas_Key_Mode.NORMAL)
-    canvas_finish_card(&board, &ed)
+    canvas_finish_editing(&board, &ed)
 
     nodes = canvas_items(&board, "nodes")
     right := nodes[2].(json.Object)
     edges := canvas_items(&board, "edges")
     if !testing.expect_value(t, len(edges), 1) do return
     edge := edges[0].(json.Object)
-    testing.expect_value(t, canvas_coord(right, "x"), f32(50 + CANVAS_CARD_W + CANVAS_CARD_GAP))
+    testing.expect_value(t, canvas_coord(right, "x"), f32(364))
     testing.expect_value(t, canvas_string(edge, "toNode"), canvas_string(right, "id"))
     testing.expect_value(t, canvas_string(edge, "fromSide"), "right")
     testing.expect_value(t, canvas_string(edge, "toSide"), "top")
@@ -347,9 +378,9 @@ test_canvas_keyboard_creates_and_connects_markdown_cards :: proc(t: ^testing.T) 
     testing.expect_value(t, board.selected_edge, 2)
     canvas_keyboard_key(&board, &ed, .TAB, {}, size)
     canvas_keyboard_key(&board, &ed, .ENTER, {}, size)
-    testing.expect_value(t, board.prompt, Canvas_Prompt.EDGE_LABEL)
+    testing.expect_value(t, board.editing_edge, 1)
     testing.expect_value(t, board.selected_edge, 1)
-    canvas_prompt_input(&board, &ed, {.ESCAPE}, {}, false)
+    canvas_finish_editing(&board, &ed)
     canvas_keyboard_key(&board, &ed, .D, {}, size)
     testing.expect_value(t, len(canvas_items(&board, "nodes")), 3)
     testing.expect_value(t, len(canvas_items(&board, "edges")), 1)
@@ -417,21 +448,31 @@ test_canvas_navigation_crosses_cards_and_arrows :: proc(t: ^testing.T) {
     testing.expect_value(t, board.selected_edge, 2)
     testing.expect_value(t, board.key_mode, Canvas_Key_Mode.NORMAL)
     canvas_keyboard_key(&board, &ed, .ENTER, {}, screen)
-    testing.expect_value(t, board.prompt, Canvas_Prompt.EDGE_LABEL)
+    testing.expect_value(t, board.editing_edge, 2)
 
-    theme: Theme
+    data := Theme_Data{line_spacing = 1.35}
+    theme := Theme{data = &data}
     theme.fonts[.BODY].baseSize = 20
-    field := canvas_label_layout(&board, &theme, screen)
+    field := canvas_label_editor_rect(&board, &ed, &theme, screen)
     edge := canvas_items(&board, "edges")[1].(json.Object)
     path, _ := canvas_edge_path(&board, canvas_items(&board, "nodes"), edge)
-    testing.expect_value(t, canvas_center(field.bounds), canvas_path_midpoint(path))
+    testing.expect_value(t, canvas_center(field), canvas_path_midpoint(path))
 
-    canvas_prompt_input(&board, &ed, {}, {'a', 'é'}, false)
-    canvas_prompt_input(&board, &ed, {.LEFT}, {}, false)
-    canvas_prompt_input(&board, &ed, {.ENTER}, {'b'}, false)
+    editor_begin_frame(&ed)
+    editor_handle_charpress(&ed, 'a')
+    editor_handle_charpress(&ed, 'é')
+    editor_handle_keypress(&ed, .LEFT, {})
+    editor_handle_charpress(&ed, 'b')
+    editor_end_frame(&ed)
+    canvas_finish_editing(&board, &ed)
     testing.expect_value(t, canvas_string(edge, "label"), "abé")
     canvas_keyboard_key(&board, &ed, .ENTER, {}, screen)
-    canvas_prompt_input(&board, &ed, {.ESCAPE}, {'x'}, false)
+    editor_begin_frame(&ed)
+    editor_handle_charpress(&ed, 'x')
+    editor_handle_keypress(&ed, .ESCAPE, {})
+    editor_handle_keypress(&ed, .U, {})
+    editor_end_frame(&ed)
+    canvas_finish_editing(&board, &ed)
     testing.expect_value(t, canvas_string(edge, "label"), "abé")
 }
 
@@ -448,20 +489,20 @@ test_canvas_keyboard_resize_previews_and_undoes :: proc(t: ^testing.T) {
     canvas_keyboard_key(&board, &ed, .R, {}, screen)
     canvas_keyboard_key(&board, &ed, .L, {}, screen)
     canvas_keyboard_key(&board, &ed, .K, {}, screen)
-    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, 252 + CANVAS_RESIZE_STEP, 144 - CANVAS_RESIZE_STEP})
+    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, CANVAS_CARD_W + CANVAS_RESIZE_STEP, CANVAS_CARD_H - CANVAS_RESIZE_STEP})
     testing.expect_value(t, canvas_coord(node, "width"), f32(252))
     canvas_keyboard_key(&board, &ed, .ESCAPE, {}, screen)
-    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, 252, 144})
+    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, CANVAS_CARD_W, CANVAS_CARD_H})
     testing.expect_value(t, len(board.undo), undo_count)
 
     canvas_keyboard_key(&board, &ed, .R, {}, screen)
     canvas_keyboard_key(&board, &ed, .H, {}, screen)
     canvas_keyboard_key(&board, &ed, .J, {}, screen)
     canvas_keyboard_key(&board, &ed, .ENTER, {}, screen)
-    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, 252 - CANVAS_RESIZE_STEP, 144 + CANVAS_RESIZE_STEP})
+    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, CANVAS_CARD_W - CANVAS_RESIZE_STEP, CANVAS_CARD_H + CANVAS_RESIZE_STEP})
     testing.expect_value(t, len(board.undo), undo_count + 1)
     canvas_keyboard_key(&board, &ed, .U, {}, screen)
-    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, 252, 144})
+    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, CANVAS_CARD_W, CANVAS_CARD_H})
 }
 
 @(test)
@@ -479,4 +520,54 @@ test_canvas_keyboard_zoom_is_scoped_to_board :: proc(t: ^testing.T) {
     previous := board.zoom
     testing.expect(t, !canvas_keyboard_zoom(&board, {.EQUAL}, {.CTRL}, screen, 3))
     testing.expect_value(t, board.zoom, previous)
+    when ODIN_OS == .Darwin {
+        board.expanded = false
+        testing.expect_value(t, canvas_zoom_key_delta(&board, .EQUAL, {.CMD}), 1)
+        testing.expect_value(t, canvas_zoom_key_delta(&board, .MINUS, {.CMD}), -1)
+    }
+}
+
+@(test)
+test_canvas_move_snaps_to_the_visible_grid :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    screen := [2]f32{800, 450}
+    board.zoom = 0.25
+    board.selected = canvas_add_card(&board, -17, 31)
+    step := canvas_grid_step(board.zoom)
+    testing.expect_value(t, step, i64(112))
+    testing.expect_value(t, canvas_grid_step(1), i64(28))
+
+    canvas_keyboard_key(&board, &ed, .M, {}, screen)
+    canvas_keyboard_key(&board, &ed, .H, {}, screen)
+    testing.expect_value(t, board.key_move.values, [2]json.Integer{-112, 31})
+    canvas_keyboard_key(&board, &ed, .H, {}, screen)
+    testing.expect_value(t, board.key_move.values, [2]json.Integer{-224, 31})
+    canvas_keyboard_key(&board, &ed, .K, {}, screen)
+    testing.expect_value(t, board.key_move.values, [2]json.Integer{-224, 0})
+    canvas_keyboard_key(&board, &ed, .L, {}, screen)
+    testing.expect_value(t, board.key_move.values, [2]json.Integer{-112, 0})
+    canvas_keyboard_key(&board, &ed, .J, {}, screen)
+    testing.expect_value(t, board.key_move.values, [2]json.Integer{-112, 112})
+    canvas_keyboard_key(&board, &ed, .ENTER, {}, screen)
+    node := canvas_items(&board, "nodes")[0].(json.Object)
+    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{-112, 112, 224, 112})
+}
+
+@(test)
+test_canvas_repeat_uses_distinct_movement_and_zoom_intervals :: proc(t: ^testing.T) {
+    keys: Key_Repeat_State
+    keys.keys[.H] = {is_pressed = true, pressed_at = 10, repeat_time = 10}
+    keys.keys[.EQUAL] = {is_pressed = true, pressed_at = 10, repeat_time = 10}
+    testing.expect(t, !key_repeat_should_repeat(&keys, .H, 10.20, CANVAS_REPEAT_DELAY_MS, CANVAS_DIRECTION_REPEAT_MS))
+    testing.expect(t, !key_repeat_should_repeat(&keys, .EQUAL, 10.20, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS))
+    testing.expect(t, key_repeat_should_repeat(&keys, .H, 10.22, CANVAS_REPEAT_DELAY_MS, CANVAS_DIRECTION_REPEAT_MS))
+    testing.expect(t, key_repeat_should_repeat(&keys, .EQUAL, 10.22, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS))
+    testing.expect(t, key_repeat_should_repeat(&keys, .H, 10.27, CANVAS_REPEAT_DELAY_MS, CANVAS_DIRECTION_REPEAT_MS))
+    testing.expect(t, !key_repeat_should_repeat(&keys, .EQUAL, 10.27, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS))
+    testing.expect(t, key_repeat_should_repeat(&keys, .EQUAL, 10.31, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS))
+    keys.keys[.EQUAL].is_pressed = false
+    testing.expect(t, !key_repeat_should_repeat(&keys, .EQUAL, 10.50, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS))
 }

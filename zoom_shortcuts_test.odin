@@ -59,11 +59,6 @@ test_live_zoom_preserves_pending_replace :: proc(t: ^testing.T) {
     ed := Editor{}
     editor_init(&ed)
     defer editor_destroy(&ed)
-    defer {
-        for item in ed.undos do delete(item.data)
-        delete(ed.undos)
-        delete(ed.undo_trackers)
-    }
     strings.write_string(&ed.sb, "a")
     editor_begin_frame(&ed)
     defer editor_end_frame(&ed)

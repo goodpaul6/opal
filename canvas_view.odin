@@ -16,7 +16,7 @@ Canvas_Button :: struct {
 
 canvas_toolbar_buttons :: proc(board: ^Canvas, theme: ^Theme) -> (buttons: [3]Canvas_Button) {
     labels := [3]string{"New card", "Open", "Save"}
-    if board.editing != 0 {
+    if canvas_editor_active(board) {
         labels[0] = "Done"
         labels[1] = "Collapse" if board.expanded else "Expand"
     }
@@ -103,7 +103,7 @@ canvas_toggle_expanded :: proc(board: ^Canvas, ed: ^Editor) {
 
 CANVAS_ZOOM_SETTLE_SECONDS :: 0.12
 CANVAS_MIN_ZOOM :: 0.12
-CANVAS_GRID_STEP :: 28
+CANVAS_MAX_ZOOM :: 3
 
 canvas_grid_step :: proc(zoom: f32) -> i64 {
     step := i64(CANVAS_GRID_STEP)
@@ -115,7 +115,7 @@ canvas_grid_step :: proc(zoom: f32) -> i64 {
 
 canvas_zoom_at :: proc(board: ^Canvas, point: [2]f32, wheel: f32, now: f64 = 0) -> bool {
     anchor := (point - board.pan) / board.zoom
-    zoom := clamp(board.zoom * math.pow(f32(1.15), wheel), CANVAS_MIN_ZOOM, 3)
+    zoom := clamp(board.zoom * math.pow(f32(1.15), wheel), CANVAS_MIN_ZOOM, CANVAS_MAX_ZOOM)
     if zoom == board.zoom do return false
     board.zoom = zoom
     board.pan = point - anchor * board.zoom
@@ -189,61 +189,6 @@ canvas_hit_card :: proc(board: ^Canvas, nodes: json.Array, mouse: [2]f32) -> int
     return 0
 }
 
-canvas_edge_label_rect :: proc(theme: ^Theme, text: string, midpoint: [2]f32, zoom: f32) -> rl.Rectangle {
-    font := &theme.fonts[.BODY]
-    w := (display_text_width(font, text, &theme.font_metrics[.BODY]) + 12) * zoom
-    h := (f32(font.baseSize) + 6) * zoom
-    return {midpoint.x - w / 2, midpoint.y - h / 2, w, h}
-}
-
-Canvas_Label_Layout :: struct {
-    bounds: rl.Rectangle,
-    origin: [2]f32,
-    caret_x: f32,
-}
-
-canvas_label_layout :: proc(board: ^Canvas, theme: ^Theme, screen: [2]f32) -> (layout: Canvas_Label_Layout) {
-    edge := canvas_items(board, "edges")[board.selected_edge - 1].(json.Object)
-    path, ok := canvas_edge_path(board, canvas_items(board, "nodes"), edge)
-    if !ok do return
-
-    zoom := board.zoom
-    text := strings.to_string(board.prompt_text)
-    midpoint := canvas_path_midpoint(path)
-    bounds := canvas_edge_label_rect(theme, text, midpoint, zoom)
-    bounds.width = min(max(bounds.width, 96 * zoom), max(0, screen.x - 16))
-    bounds.x = clamp(midpoint.x - bounds.width / 2, 8, max(8, screen.x - bounds.width - 8))
-    bounds.y = clamp(bounds.y, CANVAS_BAR + 4, max(CANVAS_BAR + 4, screen.y - bounds.height - 4))
-    font := &theme.fonts[.BODY]
-    caret := display_text_width(font, text[:board.prompt_cursor], &theme.font_metrics[.BODY]) * zoom
-    pad := 6 * zoom
-    scroll := max(0, caret + 2 - max(0, bounds.width - 2 * pad))
-    origin := [2]f32{bounds.x + pad - scroll, bounds.y + 3 * zoom}
-    return {bounds, origin, origin.x + caret}
-}
-
-canvas_label_click :: proc(board: ^Canvas, theme: ^Theme, mouse, screen: [2]f32) {
-    layout := canvas_label_layout(board, theme, screen)
-    if layout.bounds.width <= 0 || !rl.CheckCollisionPointRec(mouse, layout.bounds) {
-        canvas_finish_label(board)
-        return
-    }
-    x := (mouse.x - layout.origin.x) / board.zoom
-    font := &theme.fonts[.BODY]
-    metrics := &theme.font_metrics[.BODY]
-    pen: Display_Pen
-    text := strings.to_string(board.prompt_text)
-    board.prompt_replace_all = false
-    board.prompt_cursor = len(text)
-    for ch, offset in text {
-        start := display_pen_step(&pen, font, metrics, ch)
-        if x < (start + pen.x) / 2 {
-            board.prompt_cursor = offset
-            break
-        }
-    }
-}
-
 canvas_hit_edge_label :: proc(board: ^Canvas, theme: ^Theme, nodes: json.Array, mouse: [2]f32) -> int {
     edges := canvas_items(board, "edges")
     for i := len(edges) - 1; i >= 0; i -= 1 {
@@ -274,7 +219,7 @@ canvas_add_at :: proc(board: ^Canvas, ed: ^Editor, point: [2]f32) {
 
 canvas_add_from_toolbar :: proc(board: ^Canvas, ed: ^Editor, width, height: f32) {
     center := [2]f32{width / 2, (height + CANVAS_BAR) / 2}
-    half_card := [2]f32{CANVAS_CARD_W / 2, CANVAS_CARD_H / 2} * board.zoom
+    half_card := canvas_new_card_size(board.zoom) * board.zoom / 2
     point := center - half_card
     nodes := canvas_items(board, "nodes")
     previous := board.selected
@@ -299,19 +244,6 @@ canvas_open_prompt :: proc(board: ^Canvas, ed: ^Editor) {
     }
 }
 
-canvas_label_prompt :: proc(board: ^Canvas) {
-    canvas_begin_prompt(board, .EDGE_LABEL)
-    board.message = ""
-    edge := canvas_items(board, "edges")[board.selected_edge - 1].(json.Object)
-    strings.write_string(&board.prompt_text, canvas_string(edge, "label"))
-    board.prompt_cursor = len(board.prompt_text.buf)
-}
-
-canvas_finish_label :: proc(board: ^Canvas) {
-    canvas_set_edge_label(board, board.selected_edge, strings.to_string(board.prompt_text))
-    board.prompt = .NONE
-}
-
 canvas_prompt_clear_selection :: proc(board: ^Canvas) {
     if board.prompt_replace_all {
         strings.builder_reset(&board.prompt_text)
@@ -327,7 +259,8 @@ canvas_prompt_insert :: proc(board: ^Canvas, text: []byte) {
     }
 }
 
-canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey, chars: []rune, shortcut: bool) {
+canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey, chars: []rune, mods: Editor_Key_Mod_State) {
+    shortcut := .CMD in mods || .CTRL in mods
     if board.prompt == .CLOSE {
         for key in keys {
             #partial switch key {
@@ -362,9 +295,9 @@ canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey,
                 buf := board.prompt_text.buf[:]
                 pos := board.prompt_cursor
                 if key == .HOME || (shortcut && key == .LEFT) {
-                    pos = 0
+                    pos -= byte_index_to_editor_loc(pos, buf).col
                 } else if key == .END || (shortcut && key == .RIGHT) {
-                    pos = len(buf)
+                    pos = editor_find_line_end(buf, pos)
                 } else if board.prompt_replace_all {
                     pos = 0 if key == .LEFT else len(buf)
                 } else if key == .LEFT {
@@ -397,30 +330,10 @@ canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey,
             case .V:
                 if shortcut {
                     if text, ok := editor_system_clipboard_get(nil); ok {
-                        if board.prompt == .EDGE_LABEL {
-                            for rune_in_clipboard in strings.trim_space(text) {
-                                ch := ' ' if rune_in_clipboard == '\n' || rune_in_clipboard == '\r' else rune_in_clipboard
-                                if ch >= ' ' && ch != 127 {
-                                    encoded, count := utf8.encode_rune(ch)
-                                    canvas_prompt_insert(board, encoded[:count])
-                                }
-                            }
-                        } else {
-                            canvas_prompt_insert(board, transmute([]byte)strings.trim_space(text))
-                        }
+                        canvas_prompt_insert(board, transmute([]byte)strings.trim_space(text))
                     }
                 }
-            case .S:
-                if shortcut && board.prompt == .EDGE_LABEL {
-                    canvas_finish_label(board)
-                    canvas_request_save(board, ed)
-                    return
-                }
             case .ENTER:
-                if board.prompt == .EDGE_LABEL {
-                    canvas_finish_label(board)
-                    return
-                }
                 path := strings.trim_space(strings.to_string(board.prompt_text))
                 if path == "" do continue
                 if board.prompt == .OPEN {
@@ -434,7 +347,7 @@ canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey,
 }
 
 canvas_zoom_key_delta :: proc(board: ^Canvas, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) -> int {
-    if board.expanded || (board.prompt != .NONE && board.prompt != .EDGE_LABEL) do return 0
+    if board.expanded || board.prompt != .NONE do return 0
     return live_zoom_shortcut_delta(key, mods, .CMD in mods)
 }
 
@@ -461,26 +374,15 @@ canvas_handle_input :: proc(
         return true, true
     }
     if board.prompt != .NONE {
-        if board.prompt == .EDGE_LABEL {
-            mouse := rl.GetMousePosition()
-            if rl.IsMouseButtonPressed(.LEFT) {
-                canvas_label_click(board, theme, mouse, screen)
-                return true, true
-            }
-            if wheel := rl.GetMouseWheelMove(); wheel != 0 && mouse.y >= CANVAS_BAR {
-                canvas_zoom_at(board, mouse, wheel, rl.GetTime())
-                return true, true
-            }
-        }
-        canvas_prompt_input(board, ed, keys, chars, shortcut)
+        canvas_prompt_input(board, ed, keys, chars, mods)
         return true, len(keys) > 0 || len(chars) > 0
     }
     mouse := rl.GetMousePosition()
     pressed, down := rl.IsMouseButtonPressed(.LEFT), rl.IsMouseButtonDown(.LEFT)
-    if board.editing != 0 {
+    if canvas_editor_active(board) {
         if pressed && mouse.y < CANVAS_BAR {
             buttons := canvas_toolbar_buttons(board, theme)
-            if rl.CheckCollisionPointRec(mouse, buttons[0].rect) do board.finish_card = true
+            if rl.CheckCollisionPointRec(mouse, buttons[0].rect) do board.finish_editing = true
             if rl.CheckCollisionPointRec(mouse, buttons[1].rect) do canvas_toggle_expanded(board, ed)
             if rl.CheckCollisionPointRec(mouse, buttons[2].rect) do canvas_request_save(board, ed)
             return true, true
@@ -492,13 +394,13 @@ canvas_handle_input :: proc(
             }
             if shortcut && key == .ENTER {
                 if .SHIFT in mods do canvas_toggle_expanded(board, ed)
-                else do board.finish_card = true
+                else do board.finish_editing = true
                 return true, true
             }
         }
         if board.expanded do return false, false
-        if pressed && !rl.CheckCollisionPointRec(mouse, canvas_editor_bounds(board)) {
-            canvas_finish_card(board, ed)
+        if pressed && !rl.CheckCollisionPointRec(mouse, canvas_inline_editor_outer_bounds(board, ed, theme, screen)) {
+            canvas_finish_editing(board, ed)
         } else {
             wheel := rl.GetMouseWheelMove()
             if wheel != 0 && mouse.y >= CANVAS_BAR {
@@ -535,7 +437,7 @@ canvas_handle_input :: proc(
                 return true, true
             }
             if canvas_keyboard_key(board, ed, key, mods, {f32(width), f32(height)}) do board.last_click = 0
-            if board.editing != 0 || board.prompt != .NONE do return true, true
+            if canvas_editor_active(board) || board.prompt != .NONE do return true, true
         }
     }
 
@@ -576,7 +478,7 @@ canvas_handle_input :: proc(
             board.last_click = 0
             if edge != 0 {
                 canvas_reveal_edge(board, screen)
-                canvas_label_prompt(board)
+                canvas_edit_edge(board, ed, edge)
             }
             else if index != 0 do canvas_edit_card(board, ed, index)
             else do canvas_add_at(board, ed, mouse)
@@ -729,7 +631,7 @@ canvas_draw_board :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, hei
     }
 
     for item, i in edges {
-        if board.prompt == .EDGE_LABEL && i + 1 == board.selected_edge do continue
+        if board.editing_edge == i + 1 do continue
         edge := item.(json.Object)
         label := canvas_string(edge, "label")
         if label == "" do continue
@@ -740,29 +642,16 @@ canvas_draw_board :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, hei
         rl.DrawRectangleRec(bounds, bg)
         border := accent if i + 1 == board.selected_edge else rl.ColorLerp(bg, fg, 0.23)
         rl.DrawRectangleLinesEx(bounds, 1, border)
-        canvas_draw_text(theme, label, [2]f32{bounds.x, bounds.y} + [2]f32{6, 3} * board.zoom, fg, board.zoom, rasters)
+        canvas_draw_label_lines(theme, label, [2]f32{bounds.x, bounds.y} + [2]f32{6, 3} * board.zoom, fg, board.zoom, rasters)
     }
 
-    if board.prompt == .EDGE_LABEL {
-        layout := canvas_label_layout(board, theme, {w, h})
-        if layout.bounds.width > 0 {
-            rl.DrawRectangleRec(layout.bounds, bg)
-            rl.DrawRectangleLinesEx(layout.bounds, 1, accent)
-            text := strings.to_string(board.prompt_text)
-            scale := board.zoom
-            glyph_height := f32(theme.fonts[.BODY].baseSize) * scale
-            clip := layout.bounds
-            clip.x += 1
-            clip.width = max(0, clip.width - 2)
-            display_begin_scissor(theme, clip, height)
-            if board.prompt_replace_all && text != "" {
-                selection_width := display_text_width(&theme.fonts[.BODY], text, &theme.font_metrics[.BODY]) * scale
-                rl.DrawRectangleRec({layout.origin.x, layout.origin.y, selection_width, glyph_height}, display_selection_color(theme))
-            }
-            canvas_draw_text(theme, text, layout.origin, fg, scale, rasters)
-            caret := rl.Rectangle{layout.caret_x, layout.origin.y, max(1, scale), glyph_height}
-            rl.DrawRectangleRec(display_snap_rect(theme, caret), accent)
-            rl.EndScissorMode()
+    if board.editing_edge != 0 {
+        bounds := canvas_label_editor_rect(board, ed, theme, {w, h})
+        if bounds.width > 0 && bounds.height > 0 {
+            rl.DrawRectangleRec(bounds, bg)
+            rl.DrawRectangleLinesEx(bounds, 1, accent)
+            canvas_inline_editor_begin(board, ed, theme, {w, h})
+            editor_display_draw(ed, theme, width, height, trace, show_status = false, rasters = rasters)
         }
     }
 
@@ -797,7 +686,7 @@ canvas_draw_board :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, hei
         size := display_text_width(font, help, &theme.font_metrics[.BODY])
         canvas_draw_text(theme, help, {max(12, (w - size) / 2), h / 2}, muted)
     }
-    if board.editing != 0 do editor_status_draw(ed, theme, width, height)
+    if canvas_editor_active(board) do editor_status_draw(ed, theme, width, height)
 }
 
 // Keep board layout bounded even when a card contains a long draft.
@@ -842,7 +731,7 @@ canvas_draw_toolbar :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, h
         case .G_PREFIX: message = "g · c to connect"
     }
 
-    if board.prompt != .NONE && board.prompt != .EDGE_LABEL {
+    if board.prompt != .NONE {
         panel := rl.Rectangle{12, CANVAS_BAR + 12, max(0, min(f32(width) - 24, 720)), size * 3 + 32}
         rl.DrawRectangleRec(panel, rl.ColorLerp(bg, fg, 0.12))
         label := "Open canvas" if board.prompt == .OPEN else "Save canvas"
@@ -872,7 +761,7 @@ canvas_draw_toolbar :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, h
         rl.EndScissorMode()
     } else if message != "" {
         pos := [2]f32{12, f32(height) - size - 12}
-        if board.editing != 0 do pos.y -= editor_status_line_height(theme)
+        if canvas_editor_active(board) do pos.y -= editor_status_line_height(theme)
         panel := rl.Rectangle{0, pos.y - 5, f32(width), size + 20}
         rl.DrawRectangleRec(panel, rl.ColorLerp(bg, fg, 0.08))
         canvas_draw_text(theme, message, pos, fg)
