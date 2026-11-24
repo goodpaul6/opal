@@ -113,6 +113,17 @@ canvas_grid_step :: proc(zoom: f32) -> i64 {
     return step
 }
 
+canvas_drag_resize_size :: proc(rect: rl.Rectangle, delta: [2]f32, zoom: f32) -> [2]json.Integer {
+    grid := f32(canvas_grid_step(zoom))
+    origin := [2]f32{rect.x, rect.y}
+    size := [2]f32{rect.width, rect.height}
+    edge := canvas_round_to_grid(origin + size + delta, grid)
+    minimum := origin + [2]f32{min(CANVAS_MIN_CARD_W, size.x), min(CANVAS_MIN_CARD_H, size.y)}
+    edge.x = max(edge.x, math.ceil(minimum.x / grid) * grid)
+    edge.y = max(edge.y, math.ceil(minimum.y / grid) * grid)
+    return {json.Integer(edge.x - origin.x), json.Integer(edge.y - origin.y)}
+}
+
 canvas_zoom_at :: proc(board: ^Canvas, point: [2]f32, wheel: f32, now: f64 = 0) -> bool {
     anchor := (point - board.pan) / board.zoom
     zoom := clamp(board.zoom * math.pow(f32(1.15), wheel), CANVAS_MIN_ZOOM, CANVAS_MAX_ZOOM)
@@ -235,13 +246,9 @@ canvas_add_from_toolbar :: proc(board: ^Canvas, ed: ^Editor, width, height: f32)
     canvas_add_at(board, ed, point)
 }
 
-canvas_open_prompt :: proc(board: ^Canvas, ed: ^Editor) {
-    if canvas_dirty(board, ed) {
-        board.message = "Save this canvas before opening another"
-    } else {
-        board.message = ""
-        canvas_begin_prompt(board, .OPEN)
-    }
+canvas_open_prompt :: proc(board: ^Canvas) {
+    board.message = ""
+    canvas_begin_prompt(board, .OPEN)
 }
 
 canvas_prompt_clear_selection :: proc(board: ^Canvas) {
@@ -261,15 +268,23 @@ canvas_prompt_insert :: proc(board: ^Canvas, text: []byte) {
 
 canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey, chars: []rune, mods: Editor_Key_Mod_State) {
     shortcut := .CMD in mods || .CTRL in mods
-    if board.prompt == .CLOSE {
+    if board.prompt == .CLOSE || board.prompt == .CONFIRM_OPEN {
+        closing := board.prompt == .CLOSE
         for key in keys {
             #partial switch key {
-                case .ESCAPE: board.prompt = .NONE
-                case .D: board.exit_requested = true
+                case .ESCAPE:
+                    canvas_cancel_pending_open(board)
+                    board.prompt = .NONE
+                    return
+                case .D:
+                    if closing do board.exit_requested = true
+                    else do canvas_open_pending(board)
+                    return
                 case .ENTER:
-                    board.close_after_save = true
+                    board.close_after_save = closing
                     board.prompt = .NONE
                     canvas_request_save(board, ed)
+                    return
                 case:
             }
         }
@@ -286,6 +301,7 @@ canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey,
     for key in keys {
         #partial switch key {
             case .ESCAPE:
+                canvas_cancel_pending_open(board)
                 board.prompt = .NONE
                 board.close_after_save = false
                 board.finish_after_save = false
@@ -335,12 +351,25 @@ canvas_prompt_input :: proc(board: ^Canvas, ed: ^Editor, keys: []rl.KeyboardKey,
                 }
             case .ENTER:
                 path := strings.trim_space(strings.to_string(board.prompt_text))
+                if board.prompt == .COMMAND {
+                    board.prompt = .NONE
+                    if path != "" {
+                        if cmd, ok := command_parse(&path); ok {
+                            command := cmd
+                            canvas_run_command(board, ed, &command)
+                        } else {
+                            board.message = "Invalid canvas command"
+                        }
+                    }
+                    return
+                }
                 if path == "" do continue
                 if board.prompt == .OPEN {
-                    if canvas_open(board, path) do board.prompt = .NONE
-                } else if canvas_save(board, path) {
+                    canvas_request_open(board, ed, path)
+                } else if board.prompt == .SAVE && canvas_save(board, path) {
                     canvas_complete_save(board)
                 }
+                return
             case:
         }
     }
@@ -421,7 +450,7 @@ canvas_handle_input :: proc(
             if rl.CheckCollisionPointRec(mouse, buttons[0].rect) {
                 canvas_add_from_toolbar(board, ed, f32(width), f32(height))
             } else if rl.CheckCollisionPointRec(mouse, buttons[1].rect) {
-                canvas_open_prompt(board, ed)
+                canvas_open_prompt(board)
             } else if rl.CheckCollisionPointRec(mouse, buttons[2].rect) {
                 canvas_request_save(board, ed)
             }
@@ -514,12 +543,13 @@ canvas_handle_input :: proc(
                 origin := board.drag_origin
                 resizing := board.drag == .RESIZE
                 local_delta := delta / board.zoom
-                value := [2]f32{origin.x, origin.y} + local_delta
+                values: [2]json.Integer
                 if resizing {
-                    size := [2]f32{origin.width, origin.height} + local_delta
-                    value = {max(100, size.x), max(68, size.y)}
+                    values = canvas_drag_resize_size(origin, local_delta, board.zoom)
+                } else {
+                    value := [2]f32{origin.x, origin.y} + local_delta
+                    values = {json.Integer(math.round(value.x)), json.Integer(math.round(value.y))}
                 }
-                values := [2]json.Integer{json.Integer(math.round(value.x)), json.Integer(math.round(value.y))}
                 if !canvas_drag_geometry(board, {board.selected, resizing, values}) && !board.drag_recorded {
                     if !down do board.drag = .NONE
                     return true, !down
@@ -736,16 +766,21 @@ canvas_draw_toolbar :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, h
         rl.DrawRectangleRec(panel, rl.ColorLerp(bg, fg, 0.12))
         label := "Open canvas" if board.prompt == .OPEN else "Save canvas"
         value := strings.to_string(board.prompt_text)
-        if board.prompt == .CLOSE {
-            label = "Save changes before closing?"
+        if board.prompt == .CLOSE || board.prompt == .CONFIRM_OPEN {
+            label = "Save changes before closing?" if board.prompt == .CLOSE else "Save changes before opening another canvas?"
             value = "Enter to save, D to discard, Esc to cancel"
         }
-        if value == "" {
+        input_x := panel.x + 12
+        if board.prompt == .COMMAND {
+            label = "Canvas command"
+            input_x += display_glyph_advance(&theme.fonts[.BODY], ':', &theme.font_metrics[.BODY])
+        }
+        if value == "" && board.prompt != .COMMAND {
             value = "Type or paste a .canvas path and press Enter"
         } else {
             font := &theme.fonts[.BODY]
             metrics := &theme.font_metrics[.BODY]
-            for len(value) > 0 && display_text_width(font, value, metrics) > panel.width - 24 {
+            for len(value) > 0 && display_text_width(font, value, metrics) > panel.x + panel.width - input_x - 12 {
                 _, n := utf8.decode_rune(value)
                 value = value[n:]
             }
@@ -754,9 +789,18 @@ canvas_draw_toolbar :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, width, h
         canvas_draw_text(theme, label, {panel.x + 12, panel.y + 9}, fg)
         if board.prompt_replace_all && len(board.prompt_text.buf) > 0 {
             selection_w := display_text_width(&theme.fonts[.BODY], value, &theme.font_metrics[.BODY])
-            rl.DrawRectangleRec({panel.x + 12, panel.y + size + 15, selection_w, size}, display_selection_color(theme))
+            rl.DrawRectangleRec({input_x, panel.y + size + 15, selection_w, size}, display_selection_color(theme))
         }
-        canvas_draw_text(theme, value, {panel.x + 12, panel.y + size + 15}, fg)
+        if board.prompt == .COMMAND {
+            canvas_draw_text(theme, ":", {panel.x + 12, panel.y + size + 15}, fg)
+            if !board.prompt_replace_all {
+                visible_start := len(board.prompt_text.buf) - len(value)
+                cursor := clamp(board.prompt_cursor - visible_start, 0, len(value))
+                offset := display_text_width(&theme.fonts[.BODY], value[:cursor], &theme.font_metrics[.BODY])
+                rl.DrawRectangleRec({input_x + offset, panel.y + size + 15, INSERT_CARET_W, size}, theme.data.accent_color)
+            }
+        }
+        canvas_draw_text(theme, value, {input_x, panel.y + size + 15}, fg)
         canvas_draw_text(theme, board.message, {panel.x + 12, panel.y + 2 * size + 20}, theme.data.accent_color)
         rl.EndScissorMode()
     } else if message != "" {

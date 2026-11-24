@@ -1,10 +1,109 @@
 package main
 
 import "core:encoding/json"
+import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:testing"
 import rl "vendor:raylib"
+
+@(test)
+test_canvas_commands_work_without_a_selection :: proc(t: ^testing.T) {
+    dir, err := os.make_directory_temp("", "opal-canvas-commands-*", context.temp_allocator)
+    if !testing.expect(t, err == nil) do return
+    defer os.remove_all(dir)
+    path := os.join_path({dir, "new board.canvas"}, context.temp_allocator) or_else ""
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    size := [2]f32{800, 450}
+    canvas_add_card(&board, 0, 0)
+
+    testing.expect(t, canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, size))
+    testing.expect_value(t, board.prompt, Canvas_Prompt.COMMAND)
+    canvas_prompt_insert(&board, transmute([]byte)fmt.tprintf("w \"%s\"", path))
+    canvas_prompt_input(&board, &ed, {.ENTER}, {}, {})
+    testing.expect_value(t, board.prompt, Canvas_Prompt.NONE)
+    testing.expect(t, os.exists(path))
+    testing.expect(t, !canvas_dirty(&board, &ed))
+
+    canvas_add_card(&board, 252, 0)
+    canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, size)
+    canvas_prompt_input(&board, &ed, {.ENTER}, {'q'}, {})
+    testing.expect_value(t, board.prompt, Canvas_Prompt.CLOSE)
+    testing.expect(t, !board.exit_requested)
+    canvas_prompt_input(&board, &ed, {.ESCAPE}, {}, {})
+    canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, size)
+    canvas_prompt_input(&board, &ed, {.ENTER}, {'w', 'q'}, {})
+    testing.expect(t, !canvas_dirty(&board, &ed))
+    testing.expect(t, board.exit_requested)
+}
+
+@(test)
+test_canvas_open_dirty_board_offers_save_and_discard :: proc(t: ^testing.T) {
+    dir, err := os.make_directory_temp("", "opal-canvas-open-*", context.temp_allocator)
+    if !testing.expect(t, err == nil) do return
+    defer os.remove_all(dir)
+    next := os.join_path({dir, "next.canvas"}, context.temp_allocator) or_else ""
+    prior := os.join_path({dir, "prior.canvas"}, context.temp_allocator) or_else ""
+    missing := os.join_path({dir, "missing.canvas"}, context.temp_allocator) or_else ""
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    size := [2]f32{800, 450}
+    canvas_add_card(&board, 0, 0)
+    if !testing.expect(t, canvas_save(&board, next)) do return
+    draft: Canvas
+    canvas_init(&draft)
+    defer canvas_destroy(&draft)
+    canvas_add_card(&draft, 0, 0)
+    canvas_add_card(&draft, 252, 0)
+
+    canvas_open_prompt(&draft)
+    canvas_prompt_insert(&draft, transmute([]byte)next)
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    testing.expect_value(t, draft.prompt, Canvas_Prompt.CONFIRM_OPEN)
+    canvas_prompt_input(&draft, &ed, {.ESCAPE}, {}, {})
+    testing.expect_value(t, draft.pending_open, "")
+    testing.expect_value(t, len(canvas_items(&draft, "nodes")), 2)
+
+    canvas_keyboard_key(&draft, &ed, .SEMICOLON, {.SHIFT}, size)
+    canvas_prompt_insert(&draft, transmute([]byte)fmt.tprintf("e! \"%s\"", missing))
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    testing.expect_value(t, draft.prompt, Canvas_Prompt.NONE)
+    testing.expect_value(t, len(canvas_items(&draft, "nodes")), 2)
+    testing.expect(t, canvas_dirty(&draft, &ed))
+
+    canvas_open_prompt(&draft)
+    canvas_prompt_insert(&draft, transmute([]byte)next)
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    testing.expect_value(t, draft.prompt, Canvas_Prompt.SAVE)
+    canvas_prompt_insert(&draft, transmute([]byte)prior)
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    testing.expect(t, os.exists(prior))
+    testing.expect_value(t, len(canvas_items(&draft, "nodes")), 1)
+    testing.expect_value(t, draft.pending_open, "")
+
+    canvas_add_card(&draft, 252, 0)
+    canvas_open_prompt(&draft)
+    canvas_prompt_insert(&draft, transmute([]byte)next)
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    canvas_prompt_input(&draft, &ed, {.D}, {}, {})
+    testing.expect_value(t, len(canvas_items(&draft, "nodes")), 1)
+    testing.expect(t, !canvas_dirty(&draft, &ed))
+
+    canvas_add_card(&draft, 252, 0)
+    canvas_add_card(&draft, 504, 0)
+    canvas_keyboard_key(&draft, &ed, .SEMICOLON, {.SHIFT}, size)
+    canvas_prompt_insert(&draft, transmute([]byte)fmt.tprintf("e! \"%s\"", prior))
+    canvas_prompt_input(&draft, &ed, {.ENTER}, {}, {})
+    testing.expect_value(t, draft.prompt, Canvas_Prompt.NONE)
+    testing.expect_value(t, len(canvas_items(&draft, "nodes")), 2)
+    testing.expect(t, !canvas_dirty(&draft, &ed))
+}
 
 @(test)
 test_canvas_markdown_cards_round_trip :: proc(t: ^testing.T) {
@@ -489,7 +588,7 @@ test_canvas_keyboard_resize_previews_and_undoes :: proc(t: ^testing.T) {
     canvas_keyboard_key(&board, &ed, .R, {}, screen)
     canvas_keyboard_key(&board, &ed, .L, {}, screen)
     canvas_keyboard_key(&board, &ed, .K, {}, screen)
-    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, CANVAS_CARD_W + CANVAS_RESIZE_STEP, CANVAS_CARD_H - CANVAS_RESIZE_STEP})
+    testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, 270, 130})
     testing.expect_value(t, canvas_coord(node, "width"), f32(252))
     canvas_keyboard_key(&board, &ed, .ESCAPE, {}, screen)
     testing.expect_value(t, canvas_rect(&board, node), rl.Rectangle{150, 150, CANVAS_CARD_W, CANVAS_CARD_H})
@@ -499,10 +598,17 @@ test_canvas_keyboard_resize_previews_and_undoes :: proc(t: ^testing.T) {
     canvas_keyboard_key(&board, &ed, .H, {}, screen)
     canvas_keyboard_key(&board, &ed, .J, {}, screen)
     canvas_keyboard_key(&board, &ed, .ENTER, {}, screen)
-    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, CANVAS_CARD_W - CANVAS_RESIZE_STEP, CANVAS_CARD_H + CANVAS_RESIZE_STEP})
+    testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, 242, 158})
     testing.expect_value(t, len(board.undo), undo_count + 1)
     canvas_keyboard_key(&board, &ed, .U, {}, screen)
     testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, CANVAS_CARD_W, CANVAS_CARD_H})
+}
+
+@(test)
+test_canvas_mouse_resize_snaps_to_grid_at_current_zoom :: proc(t: ^testing.T) {
+    rect := rl.Rectangle{-17, 31, 252, 140}
+    testing.expect_value(t, canvas_drag_resize_size(rect, {8, 20}, 0.5), [2]json.Integer{241, 137})
+    testing.expect_value(t, canvas_drag_resize_size(rect, {-500, -500}, 0.5), [2]json.Integer{129, 81})
 }
 
 @(test)

@@ -67,7 +67,7 @@ main :: proc() {
     } else {
         editor_init(&ed, system_clipboard = true)
         if path != "" && path != "--markdown" {
-            cmd := Command(Command_Edit{path})
+            cmd := Command(Command_Edit{filename = path})
             if !command_run(&cmd, &ed) do fmt.eprintln("Could not open", path)
         }
     }
@@ -93,7 +93,10 @@ main :: proc() {
         closing := rl.WindowShouldClose()
         if closing {
             if !canvas_mode || !canvas_dirty(&board, &ed) do break
-            if board.prompt != .CLOSE do canvas_begin_prompt(&board, .CLOSE)
+            if board.prompt != .CLOSE {
+                canvas_cancel_pending_open(&board)
+                canvas_begin_prompt(&board, .CLOSE)
+            }
         }
         finished_editing := board.finish_editing
         if finished_editing do canvas_finish_editing(&board, &ed)

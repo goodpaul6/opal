@@ -4,7 +4,6 @@ import "core:encoding/json"
 import "core:math"
 import rl "vendor:raylib"
 
-CANVAS_RESIZE_STEP :: 24
 CANVAS_CARD_GAP :: 36
 
 canvas_key_direction :: proc(key: rl.KeyboardKey, mode: Canvas_Key_Mode, mods: Editor_Key_Mod_State) -> [2]i32 {
@@ -271,7 +270,7 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
                 canvas_edit_card(board, ed, board.selected)
                 if board.editing != 0 do canvas_toggle_expanded(board, ed)
             case .S: canvas_request_save(board, ed)
-            case .O: canvas_open_prompt(board, ed)
+            case .O: canvas_open_prompt(board)
             case .Z: canvas_step_history(board, .SHIFT in mods)
             case .R:
                 if .CTRL not_in mods do return false
@@ -296,14 +295,22 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
             board.pan -= [2]f32{f32(direction.x), f32(direction.y)} * 90
         } else if board.key_mode == .MOVE || board.key_mode == .RESIZE {
             values := board.key_move.values
+            step := canvas_grid_step(board.zoom)
             if board.key_mode == .RESIZE {
-                increments := [2]json.Integer{json.Integer(direction.x), json.Integer(direction.y)} * CANVAS_RESIZE_STEP
-                minimum := [2]json.Integer{100, 68}
+                card := canvas_items(board, "nodes")[board.key_move.node - 1].(json.Object)
+                origin := [2]json.Integer{card["x"].(json.Integer), card["y"].(json.Integer)}
+                minimum := [2]json.Integer{CANVAS_MIN_CARD_W, CANVAS_MIN_CARD_H}
                 for axis in 0..<2 {
-                    if increments[axis] != 0 do values[axis] = max(min(minimum[axis], values[axis]), values[axis] + increments[axis])
+                    if direction[axis] == 0 do continue
+                    extent := max(1, values[axis])
+                    if origin[axis] > max(i64) - extent do continue
+                    edge := origin[axis] + extent
+                    delta := canvas_next_grid_line(edge, step, direction[axis]) - edge
+                    if delta > 0 && extent > max(i64) - delta do continue
+                    next := extent + delta
+                    if next >= min(minimum[axis], extent) do values[axis] = next
                 }
             } else {
-                step := canvas_grid_step(board.zoom)
                 for axis in 0..<2 {
                     if direction[axis] != 0 do values[axis] = canvas_next_grid_line(values[axis], step, direction[axis])
                 }
@@ -352,6 +359,11 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
     }
     if key == .F && mods == {.SHIFT} {
         canvas_frame_board(board, size)
+        return true
+    }
+    if key == .SEMICOLON && mods == {.SHIFT} {
+        board.message = ""
+        canvas_begin_prompt(board, .COMMAND)
         return true
     }
     if mods != {} do return false

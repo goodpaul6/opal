@@ -33,7 +33,7 @@ Canvas_History :: struct {
 }
 CANVAS_HISTORY_LIMIT :: 32
 
-Canvas_Prompt :: enum { NONE, OPEN, SAVE, CLOSE }
+Canvas_Prompt :: enum { NONE, OPEN, SAVE, CLOSE, COMMAND, CONFIRM_OPEN }
 Canvas_Drag :: enum { NONE, PAN, MOVE, RESIZE, CONNECT }
 Canvas_Key_Mode :: enum { NORMAL, MOVE, RESIZE, CONNECT, G_PREFIX }
 Canvas_Side :: enum { TOP, RIGHT, BOTTOM, LEFT }
@@ -41,12 +41,15 @@ CANVAS_SIDES :: [Canvas_Side]string{.TOP = "top", .RIGHT = "right", .BOTTOM = "b
 CANVAS_GRID_STEP :: 28
 CANVAS_CARD_W :: 9 * CANVAS_GRID_STEP
 CANVAS_CARD_H :: 5 * CANVAS_GRID_STEP
+CANVAS_MIN_CARD_W :: 100
+CANVAS_MIN_CARD_H :: 68
 
 Canvas :: struct {
     current: Canvas_Version,
     undo, redo: [dynamic]Canvas_History,
     next_revision, saved_revision, next_id: u64,
     filename: string,
+    pending_open: string,
     disk_bytes: []byte,
     node_indices: map[string]int,
 
@@ -121,6 +124,7 @@ canvas_destroy :: proc(board: ^Canvas) {
     delete(board.undo)
     delete(board.redo)
     delete(board.filename)
+    delete(board.pending_open)
     delete(board.disk_bytes)
     delete(board.node_indices)
     strings.builder_destroy(&board.prompt_text)
@@ -555,11 +559,40 @@ canvas_begin_prompt :: proc(board: ^Canvas, prompt: Canvas_Prompt) {
     strings.builder_reset(&board.prompt_text)
 }
 
+canvas_cancel_pending_open :: proc(board: ^Canvas) {
+    delete(board.pending_open)
+    board.pending_open = ""
+}
+
+canvas_request_open :: proc(board: ^Canvas, ed: ^Editor, path: string, discard_changes := false) -> bool {
+    if !discard_changes && canvas_dirty(board, ed) {
+        pending := strings.clone(path)
+        canvas_cancel_pending_open(board)
+        board.pending_open = pending
+        board.close_after_save = false
+        canvas_begin_prompt(board, .CONFIRM_OPEN)
+        return true
+    }
+    if !canvas_open(board, path) do return false
+    board.prompt = .NONE
+    return true
+}
+
+canvas_open_pending :: proc(board: ^Canvas) {
+    path := board.pending_open
+    board.pending_open = ""
+    defer delete(path)
+    board.prompt = .NONE
+    canvas_open(board, path)
+}
+
 canvas_complete_save :: proc(board: ^Canvas) {
     board.prompt = .NONE
     if board.close_after_save do board.exit_requested = true
+    board.close_after_save = false
     if board.finish_after_save do board.finish_editing = true
     board.finish_after_save = false
+    if board.pending_open != "" do canvas_open_pending(board)
 }
 
 canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_editing := false) {
@@ -574,23 +607,38 @@ canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_editing := false
     }
 }
 
-canvas_card_command :: proc(board: ^Canvas, ed: ^Editor, cmd: ^Command) -> bool {
+canvas_run_command :: proc(board: ^Canvas, ed: ^Editor, cmd: ^Command) -> bool {
+    editing := canvas_editor_active(board)
     switch c in cmd {
         case Command_Quit:
-            board.finish_editing = true
+            if editing {
+                board.finish_editing = true
+            } else if canvas_dirty(board, ed) {
+                canvas_begin_prompt(board, .CLOSE)
+            } else {
+                board.exit_requested = true
+            }
             return true
         case Command_Write:
             if c.filename == "" {
-                canvas_request_save(board, ed, finish_editing = c.quit)
+                board.close_after_save = c.quit && !editing
+                canvas_request_save(board, ed, finish_editing = c.quit && editing)
                 return true
             }
             canvas_commit_editor(board, ed)
             if canvas_save(board, c.filename) {
-                board.finish_editing = c.quit
+                if c.quit {
+                    if editing do board.finish_editing = true
+                    else do board.exit_requested = true
+                }
                 return true
             }
         case Command_Edit:
-            board.message = "Return to the canvas to open another document"
+            if editing {
+                board.message = "Return to the canvas to open another document"
+            } else {
+                return canvas_request_open(board, ed, c.filename, discard_changes = c.discard_changes)
+            }
     }
     return false
 }

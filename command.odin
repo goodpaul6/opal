@@ -12,6 +12,7 @@ Command_Write :: struct {
 
 Command_Edit :: struct {
     filename: string,
+    discard_changes: bool,
 }
 
 Command :: union #no_nil {
@@ -40,6 +41,7 @@ command_next_token :: proc(src: ^string) -> (Command_Token, bool) {
         for i := 1; i < len(src) && src[i] != '"'; i += 1 {
             tlen += 1
         }
+        if tlen == len(src) do return nil, false
 
         token := Command_Token_String(src[1:tlen])
         src^ = src[tlen + 1:] 
@@ -73,7 +75,10 @@ command_parse :: proc(src: ^string, allocator := context.temp_allocator) -> (cmd
     s := next_string(src) or_return
 
     if s == "w" || s == "wq" {
-        filename, ok := next_string(src) 
+        filename: string
+        if strings.trim_space(src^) != "" {
+            filename = next_string(src) or_return
+        }
 
         return Command_Write{
             strings.clone(filename, allocator),
@@ -81,10 +86,11 @@ command_parse :: proc(src: ^string, allocator := context.temp_allocator) -> (cmd
         }, true
     }
 
-    if s == "e" {
+    if s == "e" || s == "e!" {
         filename := next_string(src) or_return
+        if filename == "" do return
 
-        return Command_Edit{strings.clone(filename, allocator)}, true
+        return Command_Edit{strings.clone(filename, allocator), s == "e!"}, true
     }
 
     if s == "q" {

@@ -1,0 +1,105 @@
+{
+  "edges": [
+    {
+      "fromNode": "opal-a",
+      "fromSide": "right",
+      "id": "opal-f",
+      "toNode": "opal-e",
+      "toSide": "left"
+    },
+    {
+      "fromNode": "opal-e",
+      "fromSide": "top",
+      "id": "opal-2",
+      "label": "Get signed upload URL",
+      "toNode": "opal-1",
+      "toSide": "bottom"
+    },
+    {
+      "fromNode": "opal-9",
+      "fromSide": "top",
+      "id": "opal-4",
+      "label": "Upload via signed upload URL",
+      "toNode": "opal-1",
+      "toSide": "left"
+    },
+    {
+      "fromNode": "opal-9",
+      "fromSide": "right",
+      "id": "opal-5",
+      "toNode": "opal-a",
+      "toSide": "left"
+    },
+    {
+      "fromNode": "opal-e",
+      "fromSide": "right",
+      "id": "opal-7",
+      "label": "Queues file for processing",
+      "toNode": "opal-6",
+      "toSide": "left"
+    },
+    {
+      "fromNode": "opal-6",
+      "fromSide": "right",
+      "id": "opal-b",
+      "toNode": "opal-8",
+      "toSide": "left"
+    }
+  ],
+  "nodes": [
+    {
+      "height": 252,
+      "id": "opal-9",
+      "text": "# Frontend\n\nThis is where the user can upload files. Probably just React SPA.",
+      "type": "text",
+      "width": 252,
+      "x": -28,
+      "y": 196
+    },
+    {
+      "height": 252,
+      "id": "opal-a",
+      "text": "# Load balancer\n\nThis sits in front of our API servers.",
+      "type": "text",
+      "width": 252,
+      "x": 364,
+      "y": 196
+    },
+    {
+      "height": 252,
+      "id": "opal-e",
+      "text": "# API server\n\n```\nGET /files/upload_url\nPOST /files\nGET /files\n```",
+      "type": "text",
+      "width": 336,
+      "x": 728,
+      "y": 196
+    },
+    {
+      "height": 224,
+      "id": "opal-1",
+      "text": "# Input files S3 bucket\n\nStores input files. Upon initial upload, files are tagged to be deleted within an hour. This tag is removed once the file is queued for processing.",
+      "type": "text",
+      "width": 336,
+      "x": 728,
+      "y": -252
+    },
+    {
+      "height": 252,
+      "id": "opal-6",
+      "text": "# SQS Queue\n\nStandard queue, nothing fancy required unless we have hard fairness guarantees.",
+      "type": "text",
+      "width": 252,
+      "x": 1400,
+      "y": 196
+    },
+    {
+      "height": 252,
+      "id": "opal-8",
+      "text": "# Worker\n\nThis processes files. We scale up this worker based on queue depth.",
+      "type": "text",
+      "width": 252,
+      "x": 1708,
+      "y": 196
+    }
+  ]
+}
