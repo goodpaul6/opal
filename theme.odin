@@ -86,6 +86,39 @@ Theme :: struct {
     previous_zoom: ^Theme, // One inactive zoom level, with its own atlases.
 }
 
+Canvas_Font_Rasters :: struct {
+    body_pixels, zoom_level: i32,
+    fonts: [Theme_Font_Variant]rl.Font,
+    tried: [Theme_Font_Variant]bool,
+    prepare: bool,
+}
+
+canvas_font_rasters_destroy :: proc(rasters: ^Canvas_Font_Rasters) {
+    for font in rasters.fonts {
+        if font.texture.id != 0 do theme_unload_font(font)
+    }
+    rasters^ = {}
+}
+
+canvas_font_raster :: proc(theme: ^Theme, rasters: ^Canvas_Font_Rasters, variant: Theme_Font_Variant) -> ^rl.Font {
+    cached := &rasters.fonts[variant]
+    if cached.texture.id != 0 do return cached
+    if !rasters.prepare || rasters.tried[variant] do return nil
+
+    body := max(1, theme.fonts[.BODY].baseSize)
+    logical := theme.fonts[variant].baseSize
+    size := min(192, theme_raster_size(logical, f32(rasters.body_pixels) / f32(body)))
+    if size == theme_raster_size(logical, theme.pixel_scale.y) do return nil
+    rasters.tried[variant] = true
+    font := theme_load_font(theme.data, variant, size)
+    if font.texture.id == 0 || font.texture.id == rl.GetFontDefault().texture.id do return nil
+    // At the settled zoom these masks are close to 1:1 device pixels. Linear
+    // filtering also lets the next zoom gesture reuse a nearby atlas.
+    rl.SetTextureFilter(font.texture, .BILINEAR)
+    cached^ = font
+    return cached
+}
+
 theme_data_make_default :: proc() -> Theme_Data {
     INTER_DATA := #load("fonts/Inter-Regular.ttf")
     COMMIT_MONO_DATA := #load("fonts/CommitMono-400-Regular.otf")

@@ -1,6 +1,7 @@
 package main
 
 import "core:bytes"
+import "core:hash"
 import "core:strings"
 import te "core:text/edit"
 import rl "vendor:raylib"
@@ -28,47 +29,73 @@ editor_visual_lines :: proc(ed: ^Editor) -> [2]int {
     return {min(ed.visual_anchor, line_start), max(ed.visual_anchor, line_start)}
 }
 
-@(private="file")
 editor_visual_range :: proc(ed: ^Editor) -> [2]int {
+    if ed.visual_characterwise {
+        buf := ed.sb.buf[:]
+        head := word_caret_start(buf, ed.state.selection[0])
+        low, high := min(ed.visual_anchor, head), max(ed.visual_anchor, head)
+        if ed.visual_inclusive && high < len(buf) do high = word_next_char(buf, high)
+        return {low, high}
+    }
     lines := editor_visual_lines(ed)
     end := editor_find_line_end(ed.sb.buf[:], lines[1])
     return {lines[0], min(end + 1, len(ed.sb.buf))}
 }
 
 @(private="file")
-editor_copy_lines :: proc(ed: ^Editor, selection: [2]int) -> bool {
+editor_copy_visual :: proc(ed: ^Editor, selection: [2]int) -> bool {
     if ed.state.set_clipboard == nil do return false
     text := string(ed.sb.buf[selection[0]:selection[1]])
-    if len(text) == 0 || text[len(text) - 1] != '\n' {
+    if ed.visual_characterwise && len(text) == 0 do return false
+    if !ed.visual_characterwise && (len(text) == 0 || text[len(text) - 1] != '\n') {
         with_newline, err := strings.concatenate({text, "\n"}, context.temp_allocator)
         if err != nil do return false
         text = with_newline
     }
-    return ed.state.set_clipboard(ed.state.clipboard_user_data, text)
+    if !ed.state.set_clipboard(ed.state.clipboard_user_data, text) do return false
+    ed.clipboard_charwise_size = 0
+    // Plain-text clipboards lack Vim's register type. Remember characterwise
+    // copies ending in a newline so they still paste at the character caret.
+    if ed.visual_characterwise && text[len(text) - 1] == '\n' {
+        ed.clipboard_charwise_size = len(text)
+        ed.clipboard_charwise_hash = hash.fnv64a(transmute([]byte)text)
+    }
+    return true
 }
 
-editor_yank_lines :: proc(ed: ^Editor) {
+editor_yank_visual :: proc(ed: ^Editor) {
     selection := editor_visual_range(ed)
-    if editor_copy_lines(ed, selection) {
+    if editor_copy_visual(ed, selection) {
         ed.state.selection = {selection[0], selection[0]}
         ed.mode = .NORMAL
     }
 }
 
-editor_delete_visual_lines :: proc(ed: ^Editor) {
+editor_change_visual :: proc(ed: ^Editor) {
+    selected := editor_visual_range(ed)
+    editor_copy_visual(ed, selected)
+    selection := selected
+    if !ed.visual_characterwise {
+        lines := editor_visual_lines(ed)
+        selection[1] = editor_find_line_end(ed.sb.buf[:], lines[1])
+    }
+    editor_begin_change(ed, selection)
+}
+
+editor_delete_visual :: proc(ed: ^Editor) {
     selected := editor_visual_range(ed)
     selection := selected
     ed.mode = .NORMAL
 
     buf := ed.sb.buf[:]
-    through_end := selection[1] == len(buf)
+    through_end := !ed.visual_characterwise && selection[1] == len(buf)
     // When the last line has no terminator, delete its preceding separator.
     if through_end && selection[0] > 0 && (selection[0] == selection[1] || buf[len(buf) - 1] != '\n') {
         selection[0] -= 1
     }
     if selection[0] == selection[1] do return
 
-    editor_copy_lines(ed, selected)
+    editor_copy_visual(ed, selected)
     track_text_and_pos(ed)
     defer editor_undo_commit(ed)
     ed.state.selection = selection
@@ -92,13 +119,17 @@ editor_paste :: proc(ed: ^Editor, before := false) {
     size := len(ed.sb.buf)
     selection := ed.state.selection
     linewise := text[len(text) - 1] == '\n'
+    if linewise && len(text) == ed.clipboard_charwise_size &&
+        hash.fnv64a(transmute([]byte)text) == ed.clipboard_charwise_hash {
+        linewise = false
+    }
     caret := selection[0]
     if ed.mode == .VISUAL {
         selection = editor_visual_range(ed)
         caret = selection[0]
         keeps_terminator := selection[1] < size ||
             (selection[1] > selection[0] && ed.sb.buf[selection[1] - 1] == '\n')
-        if keeps_terminator && !linewise {
+        if !ed.visual_characterwise && keeps_terminator && text[len(text) - 1] != '\n' {
             with_newline, err := strings.concatenate({text, "\n"}, context.temp_allocator)
             if err != nil do return
             text = with_newline

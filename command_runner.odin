@@ -9,6 +9,7 @@ import "core:fmt"
 
 // TODO(Apaar): Return error enum
 command_run :: proc(cmd: ^Command, ed: ^Editor) -> bool {
+    if ed.canvas != nil do return canvas_card_command(ed.canvas, ed, cmd)
     switch c in cmd {
         case Command_Edit: {
             assert(c.filename != "")

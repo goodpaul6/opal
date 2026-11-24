@@ -2,6 +2,7 @@ package main
 
 import "core:os"
 import "core:fmt"
+import "core:strings"
 import "core:time"
 import rl "vendor:raylib"
 import rlgl "vendor:raylib/rlgl"
@@ -13,6 +14,9 @@ PAGE_MARGIN_TOP :: 40
 PAGE_MARGIN_BOTTOM :: 40
 PAGE_WIDTH_PCT :: 0.5
 OPAL_TRACE_INPUT :: #config(OPAL_TRACE_INPUT, false)
+CANVAS_REPEAT_DELAY_MS :: 210
+CANVAS_DIRECTION_REPEAT_MS :: 44
+CANVAS_ZOOM_REPEAT_MS :: 80
 
 Input_Frame_Trace :: struct {
     caret, page, status: time.Duration,
@@ -23,10 +27,14 @@ main :: proc() {
         os.exit(screenshot_main(os.args[2:]))
     }
     benchmark_startup := len(os.args) > 1 && os.args[1] == "--benchmark-startup"
+    path := os.args[1] if len(os.args) > 1 && !benchmark_startup else ""
+    canvas_mode := path == "" || strings.equal_fold(os.ext(path), ".canvas")
     launch, window_ready, theme_ready, frame_drawn: time.Tick
     if benchmark_startup do launch = time.tick_now()
 
-    rl.SetConfigFlags({.WINDOW_RESIZABLE, .WINDOW_HIGHDPI})
+    flags := rl.ConfigFlags{.WINDOW_RESIZABLE, .WINDOW_HIGHDPI}
+    if canvas_mode do flags += {.MSAA_4X_HINT}
+    rl.SetConfigFlags(flags)
 
     rl.InitWindow(
         title=WINDOW_TITLE, 
@@ -51,12 +59,28 @@ main :: proc() {
     defer theme_destroy(&theme)
     if benchmark_startup do theme_ready = time.tick_now()
 
-    ed := Editor{}
-
-    editor_init(&ed)
-    defer editor_destroy(&ed)
-    ed.state.set_clipboard = editor_system_clipboard_set
-    ed.state.get_clipboard = editor_system_clipboard_get
+    ed: Editor
+    board: Canvas
+    if canvas_mode {
+        canvas_init(&board)
+        if path != "" do canvas_open(&board, path)
+    } else {
+        editor_init(&ed)
+        ed.state.set_clipboard = editor_system_clipboard_set
+        ed.state.get_clipboard = editor_system_clipboard_get
+        if path != "" && path != "--markdown" {
+            cmd := Command(Command_Edit{path})
+            if !command_run(&cmd, &ed) do fmt.eprintln("Could not open", path)
+        }
+    }
+    defer {
+        if canvas_mode {
+            if board.editing != 0 do canvas_finish_card(&board, &ed)
+            canvas_destroy(&board)
+        } else {
+            editor_destroy(&ed)
+        }
+    }
 
     kr := Key_Repeat_State{}
     keys := make([dynamic]rl.KeyboardKey, 0, 16)
@@ -67,14 +91,22 @@ main :: proc() {
     redraw_after_wait := false
     cursor := rl.MouseCursor.DEFAULT
 
-    for !rl.WindowShouldClose() && !ed.exit_requested {
+    for !ed.exit_requested && !board.exit_requested {
+        closing := rl.WindowShouldClose()
+        if closing {
+            if canvas_mode && board.prompt == .EDGE_LABEL do canvas_finish_label(&board)
+            if !canvas_mode || !canvas_dirty(&board, &ed) do break
+            if board.prompt != .CLOSE do canvas_begin_prompt(&board, .CLOSE)
+        }
+        finished_card := board.finish_card
+        if finished_card do canvas_finish_card(&board, &ed)
         input_tick: time.Tick
         when OPAL_TRACE_INPUT do input_tick = time.tick_now()
-        key_repeat_begin_frame(&kr, 400)
+        frame_time := rl.GetTime()
+        key_repeat_begin_frame(&kr, frame_time)
         defer key_repeat_end_frame(&kr)
 
-        editor_begin_frame(&ed)
-        defer editor_end_frame(&ed)
+        mouse := rl.GetMousePosition()
 
         key_mods := Editor_Key_Mod_State{}
 
@@ -97,8 +129,33 @@ main :: proc() {
         for ch := rl.GetCharPressed(); ch != 0; ch = rl.GetCharPressed() {
             append(&chars, ch)
         }
+        frame_size := [4]i32{rl.GetScreenWidth(), rl.GetScreenHeight(), rl.GetRenderWidth(), rl.GetRenderHeight()}
+        canvas_consumed, canvas_changed := false, false
+        if canvas_mode {
+            canvas_consumed, canvas_changed = canvas_handle_input(&board, &ed, &theme, keys[:], chars[:],
+                live_editor_key_mods(key_mods, command_down), frame_size[0], frame_size[1])
+        }
+        zoom_wait: f64
+        if canvas_mode && !board.expanded && board.zoom_settle_at != 0 {
+            zoom_wait = board.zoom_settle_at - rl.GetTime()
+            if zoom_wait <= 0 {
+                board.zoom_settle_at = 0
+                canvas_changed = true
+            }
+        }
+        note_open := !canvas_mode || board.editing != 0
+        if note_open do editor_begin_frame(&ed)
+        defer if note_open do editor_end_frame(&ed)
+        if canvas_mode && board.editing != 0 && !board.expanded {
+            editor_display_begin(&ed, &theme, canvas_card_content(canvas_active_card(&board)), board.zoom, board.pan)
+        }
+        mouse_selection := false
+        if !canvas_consumed {
+            mouse_selection = editor_mouse_select(&ed, &theme, mouse, rl.IsMouseButtonPressed(.LEFT),
+                                                 rl.IsMouseButtonDown(.LEFT), rl.IsMouseButtonReleased(.LEFT))
+        }
         shortcut_repeated := false
-        if len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods || command_down) {
+        if !canvas_consumed && len(chars) > 0 && (.CTRL in key_mods || .ALT in key_mods || command_down) {
             shortcut_keys := [?]rl.KeyboardKey{.EQUAL, .MINUS, .A, .B, .C, .E, .F, .R, .V, .W}
             for key in shortcut_keys {
                 if rl.IsKeyPressedRepeat(key) && live_editor_shortcut_suppresses_chars(ed.mode, key, key_mods, command_down) {
@@ -107,31 +164,59 @@ main :: proc() {
                 }
             }
         }
-        live_editor_handle_input(&ed, &theme, keys[:], chars[:], key_mods, command_down, shortcut_repeated)
+        if !canvas_consumed {
+            live_editor_handle_input(&ed, &theme, keys[:], chars[:], key_mods, command_down, shortcut_repeated)
+        }
 
         repeats := 0
         repeat_key_held := false
         repeat_mods := live_editor_key_mods(key_mods, command_down)
+        canvas_screen := [2]f32{f32(frame_size[0]), f32(frame_size[1])}
         for key in rl.KeyboardKey {
-            if !kr.keys[key].is_pressed || editor_is_modifier_key(key) ||
-                live_editor_consumes_key(key, key_mods, command_down) ||
-                key == .V || (key == .P && ed.mode != .INSERT && ed.mode != .COMMAND) {
+            if !kr.keys[key].is_pressed || editor_is_modifier_key(key) do continue
+            if canvas_mode {
+                if delta := canvas_zoom_key_delta(&board, key, repeat_mods); delta != 0 {
+                    repeat_key_held = true
+                    if key_repeat_should_repeat(&kr, key, frame_time, CANVAS_REPEAT_DELAY_MS, CANVAS_ZOOM_REPEAT_MS) &&
+                       canvas_zoom_at(&board, canvas_view_center(canvas_screen), f32(delta), frame_time) {
+                        repeats += 1
+                    }
+                    continue
+                }
+            }
+            if canvas_consumed {
+                if canvas_mode && board.editing == 0 && board.prompt == .NONE && board.drag == .NONE &&
+                   board.key_mode != .G_PREFIX && repeat_mods - {.SHIFT} == {} &&
+                   !(board.key_mode == .CONNECT && .SHIFT in repeat_mods) &&
+                   canvas_key_direction(key, board.key_mode, repeat_mods) != {} {
+                    repeat_key_held = true
+                    if key_repeat_should_repeat(&kr, key, frame_time, CANVAS_REPEAT_DELAY_MS, CANVAS_DIRECTION_REPEAT_MS) {
+                        canvas_keyboard_key(&board, &ed, key, repeat_mods, canvas_screen)
+                        repeats += 1
+                    }
+                }
+                continue
+            }
+            if live_editor_consumes_key(key, key_mods, command_down) ||
+                key == .V || ((key == .P || key == .C) && ed.mode != .INSERT && ed.mode != .COMMAND) {
                 continue
             }
             repeat_key_held = true
-            if key_repeat_should_repeat(&kr, key, 20) {
+            if key_repeat_should_repeat(&kr, key, frame_time, 400, 20) {
                 editor_handle_keypress(&ed, key, repeat_mods)
                 repeats += 1
             }
         }
 
-        next_cursor := rl.MouseCursor.IBEAM if ed.mode == .INSERT else rl.MouseCursor.DEFAULT
+        over_note := note_open && board.prompt == .NONE && rl.CheckCollisionPointRec(mouse, ed.display.bounds)
+        note_insert := !canvas_mode && ed.mode == .INSERT
+        next_cursor := rl.MouseCursor.IBEAM if over_note || note_insert else rl.MouseCursor.DEFAULT
         if next_cursor != cursor {
             rl.SetMouseCursor(next_cursor)
             cursor = next_cursor
         }
-        frame_size := [4]i32{rl.GetScreenWidth(), rl.GetScreenHeight(), rl.GetRenderWidth(), rl.GetRenderHeight()}
-        has_input := has_key_input || len(chars) > 0 || repeats > 0
+        has_input := has_key_input || len(chars) > 0 || repeats > 0 || mouse_selection ||
+                     canvas_changed || finished_card || closing
         wake_needs_redraw := redraw_after_wait && len(keys) == 0
         if !has_input && !wake_needs_redraw && frame_size == drawn_size && !rl.IsWindowResized() {
             free_all(context.temp_allocator)
@@ -140,6 +225,9 @@ main :: proc() {
             if repeat_key_held {
                 // The editor's repeat deadline can expire without an OS event.
                 rl.WaitTime(0.001)
+                rl.PollInputEvents()
+            } else if zoom_wait > 0 {
+                rl.WaitTime(min(zoom_wait, 0.008))
                 rl.PollInputEvents()
             } else {
                 rl.EnableEventWaiting()
@@ -167,6 +255,7 @@ main :: proc() {
                 &ed, &theme,
                 frame_size[0], frame_size[1], frame_size[2], frame_size[3],
                 frame_trace,
+                &board if canvas_mode else nil,
             )
         when OPAL_TRACE_INPUT {
             if frame_trace != nil do draw_end = time.tick_now()
@@ -273,7 +362,10 @@ live_editor_handle_input :: proc(
     }
 }
 
-draw_editor_frame :: proc(ed: ^Editor, theme: ^Theme, width, height, pixel_width, pixel_height: i32, trace: ^Input_Frame_Trace = nil) {
+draw_editor_frame :: proc(
+    ed: ^Editor, theme: ^Theme, width, height, pixel_width, pixel_height: i32,
+    trace: ^Input_Frame_Trace = nil, board: ^Canvas = nil,
+) {
     if width <= 0 || height <= 0 || pixel_width <= 0 || pixel_height <= 0 do return
     render_w := f32(width)
     render_h := f32(height)
@@ -296,15 +388,22 @@ draw_editor_frame :: proc(ed: ^Editor, theme: ^Theme, width, height, pixel_width
     rlgl.MatrixMode(rlgl.MODELVIEW)
     rlgl.LoadIdentity()
 
+    rl.ClearBackground(theme.data.bg_color)
+    if board != nil && !board.expanded {
+        canvas_draw_board(board, ed, theme, width, height, trace)
+        canvas_draw_toolbar(board, ed, theme, width, height)
+        return
+    }
+    bar := f32(CANVAS_BAR) if board != nil else 0
     page_w := render_w * PAGE_WIDTH_PCT
     margin_side := (render_w - page_w) / 2
     status_h := editor_status_line_height(theme)
     content_h := max(0, render_h - status_h)
-    top := min(PAGE_MARGIN_TOP, content_h / 2)
+    top := bar + min(PAGE_MARGIN_TOP, max(0, content_h - bar) / 2)
     bottom := max(top, content_h - PAGE_MARGIN_BOTTOM)
 
-    rl.ClearBackground(theme.data.bg_color)
     editor_display_begin(ed, theme, {margin_side, top, page_w, bottom - top})
     editor_display_draw(ed, theme, width, height, trace)
     editor_display_end(ed)
+    if board != nil do canvas_draw_toolbar(board, ed, theme, width, height)
 }

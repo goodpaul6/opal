@@ -2,7 +2,33 @@
 
 A native alternative to Obsidian. Only has the features I care about.
 
+## Canvas
+
+Launch Opal to start a blank board, or pass a `.canvas` filename to reopen one.
+
+- Double-click empty space to create a Markdown card. You can also press `n` or use **New card**.
+- Drag a card to move it, or drag its bottom-right handle to resize it. To connect cards, drag from a side handle and release near the side you want on the destination card.
+- Double-click an arrow or select it and press Enter to edit its label in place. Press Enter or click outside to apply, or Esc to cancel. Apply an empty label to remove it.
+- Drag empty space to pan. Scroll or use Cmd/Ctrl+Plus or Minus to zoom the board. Press `f` to center the selection at the current zoom, or Shift+F to fit the whole board. Select a card or arrow and press Delete to remove it. On the board, Cmd/Ctrl+Z undoes a change and Cmd/Ctrl+Shift+Z redoes it.
+- Card text, padding, and arrow labels scale with board zoom. Wrapping stays the same. Opal reuses glyphs while you scroll and sharpens the text at the new zoom when scrolling stops. The expanded editor uses the regular writing font size.
+- Double-click a card or select it and press Enter to edit Markdown in place with Opal's Vim bindings. With a card selected or open, press Cmd/Ctrl+Shift+Enter for a full-page editor. Press the shortcut again or choose **Collapse** to return to the same card in place. Click outside an inline editor, choose **Done**, press Cmd/Ctrl+Enter, or use `:q` to finish editing. The card stores its text inside the canvas file.
+- **Save** or Cmd/Ctrl+S saves the whole board from either view. **Open** or Cmd/Ctrl+O opens a board from the canvas view. Type or paste a path and press Enter when prompted.
+
+Boards use [JSON Canvas 1.0](https://jsoncanvas.org/spec/1.0/). Pass a Markdown filename to Opal for the standalone editor, or launch with `--markdown` for a blank note.
+
+### Keyboard canvas
+
+- Use `h`/`j`/`k`/`l` or the arrow keys to select cards by direction. Use `b` to go left and `e` to go right. Hold Shift with the directional keys to pan. Press `i` to create the first card on an empty board or start writing in the selected card. Press Enter to open the selected card in Normal mode. From a card's Normal mode, Esc returns to the board.
+- Press `a` to append a card to the right, `o` to open one below, or `O` to open one above. The new card opens for writing in place.
+- Press `m` and use `h`/`j`/`k`/`l` to move a card. Enter places it and Esc cancels.
+- Press `r` to resize a card. Use `h`/`l` to narrow or widen it and `k`/`j` to shorten or lengthen it. Enter applies the size and Esc cancels.
+- Press `g c` to start an arrow from the selected card. Navigate to an existing card and press Enter, or press `a`, `o`, or `O` to create and connect a new card. While connecting, hold Shift with `h`/`j`/`k`/`l` to choose the destination side, or hold Option/Alt to choose the source side.
+- The same directional keys move between cards and arrows. Press Enter on a highlighted arrow to edit its label. Tab also works as a shortcut to a nearby arrow.
+- Press `d` or `x` to remove the selected card or arrow, `u` to undo, or Ctrl+R to redo.
+
 ## Writing Markdown
+
+In Normal mode, `c` followed by a motion replaces the motion's range and enters Insert mode. Use `cw` to change the rest of a word without consuming the following space, `ce` through the word end, `cc` for the current line, or `C` for the rest of the line. Use `c` in Visual mode to replace the selection. Undo reverts the deletion and replacement together.
 
 In insert mode, press Enter at the end of a list item to continue it. Numbered lists increment and task lists start a fresh unchecked item. Press Enter on an empty item to leave the list, or Shift+Enter to insert a plain newline.
 
@@ -13,6 +39,8 @@ On macOS, Cmd+Backspace deletes to the start of the line and Cmd+Forward Delete 
 In Normal mode, press `u` to undo and Ctrl+R to redo.
 
 Press Shift+V in Normal mode to select whole lines. Extend the selection with `j`/`k` or ↑/↓, then press `y` to copy or `d` to cut the selection to the system clipboard. In Normal mode, `p` pastes after the caret or line and Shift+P pastes before it. In Visual mode, `p` replaces the selection. Ctrl/Cmd+C copies the selection, and Ctrl/Cmd+V pastes in Normal, Visual, or Insert mode.
+
+Press `v` in Normal mode to select characters. Extend the selection with arrows, `h`/`j`/`k`/`l`, or word motions such as `w`, `b`, and `e`. Dragging in the note enters the same mode. Use `y`, `d`, or `p` as usual.
 
 ## Rendering checks
 

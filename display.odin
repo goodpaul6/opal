@@ -7,7 +7,9 @@ import rl "vendor:raylib"
 INSERT_CARET_W :: 2
 
 Editor_Display_State :: struct {
-    bounds: rl.Rectangle,
+    bounds: rl.Rectangle, // Window coordinates for hit testing and clipping.
+    layout_size: [2]f32,
+    zoom: f32,
     scroll_pos: [2]f32,
     checkpoints: [dynamic]Display_Checkpoint,
     checkpoint_width: f32,
@@ -28,7 +30,7 @@ editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^
         case .NORMAL: layout.label = "NORMAL"
         case .INSERT: layout.label = "INSERT"
         case .COMMAND: layout.label = "COMMAND"
-        case .VISUAL: layout.label = "VISUAL LINE"
+        case .VISUAL: layout.label = "VISUAL" if ed.visual_characterwise else "VISUAL LINE"
     }
     layout.badge_width = display_text_width(font, layout.label, metrics) + 2 * STATUS_PAD_X
     if ed.mode != .COMMAND do return
@@ -76,7 +78,6 @@ editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^
     return
 }
 
-@(private="file")
 editor_status_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32) {
     font := &theme.fonts[.BODY]
     bar_h := min(f32(height), editor_status_line_height(theme))
@@ -105,15 +106,24 @@ editor_status_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32) {
 }
 
 // Sets up display state that will use used throughout display calls
+display_view_rect :: proc(rect: rl.Rectangle, origin: [2]f32, zoom: f32) -> rl.Rectangle {
+    return {origin.x + rect.x * zoom, origin.y + rect.y * zoom, rect.width * zoom, rect.height * zoom}
+}
+
 editor_display_begin :: proc(
     ed: ^Editor,
     theme: ^Theme, 
     bounds: rl.Rectangle,
+    zoom: f32 = 1,
+    origin: [2]f32 = {},
 ) {
-    if ed.display.bounds != bounds || ed.display.checkpoint_zoom != theme.zoom_level {
+    layout_size := [2]f32{bounds.width, bounds.height}
+    if ed.display.layout_size != layout_size || ed.display.checkpoint_zoom != theme.zoom_level {
         ed.should_scroll_cursor_into_view = true
     }
-    ed.display.bounds = bounds
+    ed.display.layout_size = layout_size
+    ed.display.zoom = zoom
+    ed.display.bounds = display_view_rect(bounds, origin, zoom)
 }
 
 // Cleans up display state
@@ -121,19 +131,65 @@ editor_display_end :: proc(ed: ^Editor) {
     // TODO(Apaar): Maybe clean up wrapped_lines?
 }
 
+editor_mouse_select :: proc(ed: ^Editor, theme: ^Theme, point: [2]f32, pressed, down, released: bool) -> bool {
+    if ed.mode == .COMMAND {
+        ed.mouse_selecting = false
+        return false
+    }
+    bounds := ed.display.bounds
+    if bounds.width <= 0 || bounds.height <= 0 do return false
+    if pressed {
+        ed.mouse_selecting = rl.CheckCollisionPointRec(point, bounds)
+        if !ed.mouse_selecting do return false
+    } else {
+        if !ed.mouse_selecting do return false
+        if !down do ed.mouse_selecting = false
+        if (!down && !released) || point == ed.mouse_selection_pos do return false
+    }
+    ed.mouse_selection_pos = point
+
+    local := (point - [2]f32{bounds.x, bounds.y}) / ed.display.zoom
+    layout_size := ed.display.layout_size
+    hit := Display_Hit_Test{
+        point = {
+            local.x + ed.display.scroll_pos.x,
+            max(0, ed.display.scroll_pos.y + clamp(local.y, 0, max(0, layout_size.y - 1))),
+        },
+        offset = len(ed.sb.buf),
+    }
+    display_command_gen(ed, theme, layout_size, viewport_top = ed.display.scroll_pos.y, hit = &hit)
+    pos := word_caret_start(ed.sb.buf[:], hit.offset)
+    if pressed {
+        if ed.mode == .VISUAL do ed.mode = .NORMAL
+        ed.visual_anchor = pos
+        ed.pending_action = .NONE
+    } else {
+        if ed.state.selection[0] == pos do return false
+        if ed.mode == .INSERT do editor_undo_commit(ed)
+        ed.mode = .VISUAL if pos != ed.visual_anchor else .NORMAL
+        ed.visual_characterwise = true
+        ed.visual_inclusive = false
+    }
+    ed.state.selection = {pos, pos}
+    return true
+}
+
 editor_status_line_height :: proc(theme: ^Theme) -> f32 {
     return f32(theme.fonts[.BODY].baseSize) + 2 * STATUS_PAD_Y
 }
 
-editor_display_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32, trace: ^Input_Frame_Trace = nil) {
+editor_display_draw :: proc(
+    ed: ^Editor, theme: ^Theme, width, height: i32, trace: ^Input_Frame_Trace = nil, show_status := true,
+    rasters: ^Canvas_Font_Rasters = nil,
+) {
     tick: time.Tick
-    bounds_size := [2]f32{ed.display.bounds.width, ed.display.bounds.height}
+    bounds_size := ed.display.layout_size
     if bounds_size.x > 0 && bounds_size.y > 0 {
         if ed.should_scroll_cursor_into_view || ed.prev_frame_sel != ed.state.selection {
             when OPAL_TRACE_INPUT {
                 if trace != nil do tick = time.tick_now()
             }
-            caret := display_command_gen(ed, theme, bounds_size, viewport_top = ed.display.scroll_pos.y)
+            caret := display_command_gen(ed, theme, bounds_size, viewport_top = ed.display.scroll_pos.y, rasters = rasters)
             top, bottom := caret.y, caret.y + caret.height
             if top < ed.display.scroll_pos.y {
                 ed.display.scroll_pos.y = top
@@ -150,15 +206,19 @@ editor_display_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32, trac
         when OPAL_TRACE_INPUT {
             if trace != nil do tick = time.tick_now()
         }
-        display_begin_scissor(theme, ed.display.bounds, height)
+        bounds := ed.display.bounds
+        zoom := ed.display.zoom
+        display_begin_scissor(theme, bounds, height)
         viewport := Display_Viewport{
             theme = theme,
-            origin = [2]f32{ed.display.bounds.x, ed.display.bounds.y} - ed.display.scroll_pos,
-            top = ed.display.bounds.y,
-            bottom = ed.display.bounds.y + bounds_size.y,
+            origin = [2]f32{bounds.x, bounds.y} - ed.display.scroll_pos * zoom,
+            top = bounds.y,
+            bottom = bounds.y + bounds.height,
+            zoom = zoom,
+            rasters = rasters,
         }
         display_command_gen(ed, theme, bounds_size, display_command_draw, &viewport,
-                            viewport.bottom - viewport.origin.y, ed.display.scroll_pos.y)
+                            ed.display.scroll_pos.y + bounds_size.y, ed.display.scroll_pos.y, rasters = rasters)
         rl.EndScissorMode()
         when OPAL_TRACE_INPUT {
             if trace != nil do trace.page = time.tick_since(tick)
@@ -168,7 +228,7 @@ editor_display_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32, trac
     when OPAL_TRACE_INPUT {
         if trace != nil do tick = time.tick_now()
     }
-    editor_status_draw(ed, theme, width, height)
+    if show_status do editor_status_draw(ed, theme, width, height)
     when OPAL_TRACE_INPUT {
         if trace != nil do trace.status = time.tick_since(tick)
     }

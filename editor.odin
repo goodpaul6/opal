@@ -19,6 +19,8 @@ Editor_Mode :: enum {
 Editor_Action :: enum {
     NONE,
     DELETE,
+    CHANGE,
+    CHANGE_GO,
     GO,
     REPLACE,
 }
@@ -62,6 +64,12 @@ Editor :: struct {
 
     prev_frame_sel: [2]int,
     visual_anchor: int,
+    visual_characterwise: bool,
+    visual_inclusive: bool,
+    mouse_selecting: bool,
+    mouse_selection_pos: [2]f32,
+    clipboard_charwise_size: int,
+    clipboard_charwise_hash: u64,
 
     pending_action: Editor_Action,
 
@@ -86,6 +94,7 @@ Editor :: struct {
     display: Editor_Display_State,
 
     exit_requested: bool,
+    canvas: ^Canvas,
 }
 
 byte_index_to_editor_loc :: proc(idx: int, input_buf: []byte) -> Editor_Loc {
@@ -282,6 +291,60 @@ key_to_translation :: proc(key: rl.KeyboardKey, is_shift_pressed: bool) -> (t: t
 track_text_and_pos :: proc(ed: ^Editor) {
     editor_undo_track(ed, &ed.sb.buf)
     editor_undo_track(ed, mem.slice_to_bytes(ed.state.selection[:]))
+}
+
+editor_begin_change :: proc(ed: ^Editor, selection: [2]int) {
+    track_text_and_pos(ed)
+    ed.state.selection = selection
+    if te.has_selection(&ed.state) do editor_delete_selection(ed)
+    ed.mode = .INSERT
+}
+
+@(private="file")
+editor_change_motion :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
+    go := ed.pending_action == .CHANGE_GO
+    ed.pending_action = .NONE
+    if mods - {.SHIFT} != {} do return
+
+    buf := ed.sb.buf[:]
+    start, end := ed.state.line_start, ed.state.line_end
+    pos := word_caret_start(buf, ed.state.selection[0])
+    if go {
+        if key == .G && mods == {} do editor_begin_change(ed, {0, end})
+        return
+    }
+    if motion, ok := key_to_word_motion(key); ok {
+        selection := word_change_range(buf, pos, motion, .SHIFT in mods)
+        if selection[0] != selection[1] || motion == .Next do editor_begin_change(ed, selection)
+        return
+    }
+    if mods == {.SHIFT} {
+        #partial switch key {
+            case .FOUR: editor_begin_change(ed, {pos, end})
+            case .G:
+                last := len(buf)
+                if last > start && buf[last - 1] == '\n' do last -= 1
+                editor_begin_change(ed, {start, last})
+            case .LEFT_BRACKET, .RIGHT_BRACKET:
+                target := next_empty_line_byte_index(ed, -1 if key == .LEFT_BRACKET else 1)
+                if target >= 0 && target != pos do editor_begin_change(ed, {min(pos, target), max(pos, target)})
+        }
+        return
+    }
+    #partial switch key {
+        case .C: editor_begin_change(ed, {start, end})
+        case .ZERO, .HOME: editor_begin_change(ed, {start, pos})
+        case .END: editor_begin_change(ed, {pos, end})
+        case .H, .LEFT:
+            if pos > start do editor_begin_change(ed, {word_previous_char(buf, pos), pos})
+        case .L, .RIGHT:
+            if pos < end do editor_begin_change(ed, {pos, word_next_char(buf, pos)})
+        case .J, .DOWN:
+            if end + 1 < len(buf) do editor_begin_change(ed, {start, editor_find_line_end(buf, end + 1)})
+        case .K, .UP:
+            if start > 0 do editor_begin_change(ed, {bytes.last_index_byte(buf[:start - 1], '\n') + 1, end})
+        case .G: ed.pending_action = .CHANGE_GO
+    }
 }
 
 @(private="file")
@@ -497,6 +560,7 @@ editor_is_modifier_key :: proc(key: rl.KeyboardKey) -> bool {
 
 editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Key_Mod_State) {
     if editor_is_modifier_key(key) do return
+    ed.mouse_selecting = false
 
     editor_update_state_indices(ed)
 
@@ -508,7 +572,7 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
         }
         if key == .C && ed.mode == .VISUAL {
             ed.pending_action = .NONE
-            editor_yank_lines(ed)
+            editor_yank_visual(ed)
             return
         }
     }
@@ -522,6 +586,10 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
             }
 
             switch ed.pending_action {
+                case .CHANGE, .CHANGE_GO:
+                    editor_change_motion(ed, key, mods)
+                    break outer_switch
+
                 case .GO: {
                     if key == .G {
                         te.move_to(&ed.state, .Start)
@@ -574,6 +642,11 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
                 case .NONE:
             }
 
+            if key == .ESCAPE && ed.canvas != nil {
+                ed.canvas.finish_card = true
+                break
+            }
+
             if key == .LEFT_BRACKET && .SHIFT in mods {
                 ed.state.selection[0] = next_empty_line_byte_index(ed, -1)
             }
@@ -582,8 +655,14 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
                 ed.state.selection[0] = next_empty_line_byte_index(ed, 1)
             }
 
-            if key == .V && mods == {.SHIFT} {
+            if key == .V && mods - {.SHIFT} == {} {
+                ed.visual_characterwise = .SHIFT not_in mods
+                ed.visual_inclusive = ed.visual_characterwise
                 ed.visual_anchor = ed.state.line_start
+                if ed.visual_characterwise {
+                    ed.visual_anchor = word_caret_start(ed.sb.buf[:], ed.state.selection[0])
+                    ed.state.selection = {ed.visual_anchor, ed.visual_anchor}
+                }
                 ed.mode = .VISUAL
                 break
             }
@@ -666,6 +745,16 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
                 break
             }
 
+            if key == .C && mods - {.SHIFT} == {} {
+                if .SHIFT in mods {
+                    pos := word_caret_start(ed.sb.buf[:], ed.state.selection[0])
+                    editor_begin_change(ed, {pos, ed.state.line_end})
+                } else {
+                    ed.pending_action = .CHANGE
+                }
+                break
+            }
+
             if motion, ok := key_to_word_motion(key); ok {
                 pos := word_motion_target(ed.sb.buf[:], ed.state.selection[0], motion, .SHIFT in mods)
                 ed.state.selection = {pos, pos}
@@ -709,19 +798,54 @@ editor_handle_keypress :: proc(ed: ^Editor, key: rl.KeyboardKey, mods: Editor_Ke
         case .VISUAL: {
             was_go := ed.pending_action == .GO
             ed.pending_action = .NONE
+            if ed.visual_characterwise && mods - {.SHIFT} == {} {
+                if motion, ok := key_to_word_motion(key); ok {
+                    pos := word_motion_target(ed.sb.buf[:], ed.state.selection[0], motion, .SHIFT in mods)
+                    ed.state.selection = {pos, pos}
+                    break
+                }
+            }
             #partial switch key {
-                case .ESCAPE, .V:
-                    if key == .ESCAPE || .SHIFT in mods do ed.mode = .NORMAL
+                case .ESCAPE: ed.mode = .NORMAL
+                case .V:
+                    if mods - {.SHIFT} == {} {
+                        characterwise := .SHIFT not_in mods
+                        if characterwise == ed.visual_characterwise {
+                            ed.mode = .NORMAL
+                        } else {
+                            if !characterwise {
+                                ed.visual_anchor = bytes.last_index_byte(ed.sb.buf[:ed.visual_anchor], '\n') + 1
+                            }
+                            ed.visual_characterwise = characterwise
+                            ed.visual_inclusive = characterwise
+                        }
+                    }
                 case .LEFT_BRACKET:
                     if .CTRL in mods do ed.mode = .NORMAL
                 case .J, .DOWN: te.move_to(&ed.state, .Down)
                 case .K, .UP: te.move_to(&ed.state, .Up)
+                case .H, .LEFT, .L, .RIGHT:
+                    if ed.visual_characterwise {
+                        buf := ed.sb.buf[:]
+                        pos := word_caret_start(buf, ed.state.selection[0])
+                        if key == .H || key == .LEFT {
+                            pos = word_previous_char(buf, pos)
+                        } else if pos < len(buf) {
+                            pos = word_next_char(buf, pos)
+                        }
+                        ed.state.selection = {pos, pos}
+                    }
+                case .ZERO:
+                    if ed.visual_characterwise && mods == {} do te.move_to(&ed.state, .Soft_Line_Start)
+                case .FOUR:
+                    if ed.visual_characterwise && mods == {.SHIFT} do te.move_to(&ed.state, .Soft_Line_End)
                 case .G:
                     if .SHIFT in mods do te.move_to(&ed.state, .End)
                     else if was_go do te.move_to(&ed.state, .Start)
                     else do ed.pending_action = .GO
-                case .Y: if mods - {.SHIFT} == {} do editor_yank_lines(ed)
-                case .D: if mods == {} do editor_delete_visual_lines(ed)
+                case .Y: if mods - {.SHIFT} == {} do editor_yank_visual(ed)
+                case .D: if mods == {} do editor_delete_visual(ed)
+                case .C: if mods == {} do editor_change_visual(ed)
                 case .P: if mods - {.SHIFT} == {} do editor_paste(ed)
             }
         }

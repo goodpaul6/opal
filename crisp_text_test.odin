@@ -22,6 +22,11 @@ test_crisp_text_native_glyph_bounds :: proc(t: ^testing.T) {
         testing.expect_value(t, [2]f32{dest.x, dest.y} * c.scale, c.native_origin)
         testing.expect_value(t, [2]f32{dest.width, dest.height} * c.scale, [2]f32{9, 15})
     }
+    dest := display_glyph_destination({2, 2}, {4, 6}, source, glyph, 0.5)
+    testing.expect_value(t, dest, rl.Rectangle{3.5, 6.75, 2.25, 3.75})
+    // When the atlas matches effective device zoom, every texel maps to one device pixel.
+    sharp := display_glyph_destination({2, 2}, {4, 6}, source, glyph, 2, 4)
+    testing.expect_value(t, sharp, rl.Rectangle{3, 7.5, 4.5, 7.5})
 }
 
 @(test)

@@ -44,6 +44,21 @@ make_display_test_layout :: proc(
 }
 
 @(test)
+test_display_markdown_preview_uses_headings_without_caret :: proc(t: ^testing.T) {
+    data := Theme_Data{fg_color = rl.WHITE, accent_color = rl.GOLD}
+    theme := make_display_test_theme(&data)
+    preview := "# Idea"
+    commands := make([dynamic]Display_Command, context.temp_allocator)
+    collect :: proc(data: rawptr, cmd: Display_Command) { append(cast(^[dynamic]Display_Command)data, cmd) }
+    caret := display_command_gen(nil, &theme, {200, 100}, collect, &commands, preview = &preview)
+    testing.expect_value(t, caret.height, f32(0))
+    if !testing.expect(t, len(commands) > 0) do return
+    command := commands[len(commands) - 1].sub.(Display_Command_Text)
+    testing.expect_value(t, command.text, "Idea")
+    testing.expect(t, command.font == &theme.fonts[.H1])
+}
+
+@(test)
 test_display_em_dash_case_context :: proc(t: ^testing.T) {
     data := Theme_Data{fg_color = rl.WHITE}
     theme := make_display_test_theme(&data)
@@ -327,6 +342,108 @@ test_display_visual_line_highlights_wrapped_and_empty_rows :: proc(t: ^testing.T
     }
     testing.expect_value(t, len(rows), 3)
     for y, i in rows do testing.expect_value(t, y, 10 * f32(i))
+}
+
+@(test)
+test_mouse_drag_selects_exact_utf8_and_uses_visual_commands :: proc(t: ^testing.T) {
+    data := Theme_Data{fg_color = rl.WHITE, bg_color = rl.BLACK, accent_color = rl.GOLD}
+    theme := make_display_test_theme(&data)
+    ed: Editor
+    editor_init(&ed)
+    defer test_clipboard_destroy_editor(&ed)
+    clip := strings.builder_make()
+    defer strings.builder_destroy(&clip)
+    set_test_clipboard(&ed, &clip)
+    src :: "aé z\nnext"
+    strings.write_string(&ed.sb, src)
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    editor_display_begin(&ed, &theme, {10, 20, 100, 100})
+
+    testing.expect(t, editor_mouse_select(&ed, &theme, {14, 22}, true, true, false))
+    testing.expect_value(t, ed.mode, Editor_Mode.NORMAL)
+    testing.expect_value(t, ed.state.selection[0], 1)
+    testing.expect(t, editor_mouse_select(&ed, &theme, {23, 22}, false, false, true))
+    testing.expect_value(t, ed.mode, Editor_Mode.VISUAL)
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{1, 3})
+
+    commands := make([dynamic]Display_Command, context.temp_allocator)
+    collect :: proc(data: rawptr, cmd: Display_Command) { append(cast(^[dynamic]Display_Command)data, cmd) }
+    display_command_gen(&ed, &theme, {100, 100}, collect, &commands)
+    highlights := 0
+    highlight := rl.ColorLerp(data.bg_color, data.accent_color, 0.25)
+    for cmd in commands {
+        if rect, ok := cmd.sub.(Display_Command_Rect); ok && rect.color == highlight {
+            testing.expect_value(t, cmd.pos, [2]f32{6, 0})
+            testing.expect_value(t, rect.w, f32(7))
+            highlights += 1
+        }
+    }
+    testing.expect_value(t, highlights, 1)
+    editor_handle_keypress(&ed, .D, {})
+    testing.expect_value(t, editor_get_text(&ed), "a z\nnext")
+    testing.expect_value(t, strings.to_string(clip), "é")
+    editor_handle_keypress(&ed, .U, {})
+    testing.expect_value(t, editor_get_text(&ed), src)
+
+    // A reverse selection including the newline remains characterwise.
+    editor_mouse_select(&ed, &theme, {10, 32}, true, true, false)
+    editor_mouse_select(&ed, &theme, {27, 22}, false, false, true)
+    clear(&commands)
+    caret := display_command_gen(&ed, &theme, {100, 100}, collect, &commands)
+    testing.expect_value(t, caret, rl.Rectangle{16, 0, 6, 10})
+    if glyph, ok := commands[len(commands) - 1].sub.(Display_Command_Text); testing.expect(t, ok) {
+        testing.expect_value(t, glyph.text, "z")
+        testing.expect_value(t, glyph.color, data.bg_color)
+    }
+    editor_handle_keypress(&ed, .Y, {})
+    testing.expect_value(t, strings.to_string(clip), "z\n")
+    editor_handle_keypress(&ed, .P, {.SHIFT})
+    testing.expect_value(t, editor_get_text(&ed), "aé z\nz\nnext")
+}
+
+@(test)
+test_mouse_hit_uses_wrapped_rows_and_scroll_offset :: proc(t: ^testing.T) {
+    data: Theme_Data
+    theme := make_display_test_theme(&data)
+    ed: Editor
+    editor_init(&ed)
+    defer editor_destroy(&ed)
+    strings.write_string(&ed.sb, "aaaaaa\n\nlast")
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    editor_display_begin(&ed, &theme, {10, 20, 24, 50})
+    ed.display.scroll_pos.y = 10
+    editor_mouse_select(&ed, &theme, {15, 22}, true, true, false)
+    testing.expect_value(t, ed.state.selection[0], 5)
+    editor_mouse_select(&ed, &theme, {10, 32}, false, false, true)
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{5, 7})
+    editor_handle_keypress(&ed, .V, {.SHIFT})
+    testing.expect_value(t, ed.visual_characterwise, false)
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{0, 8})
+}
+
+@(test)
+test_canvas_zoom_preserves_wrapping_and_mouse_offsets :: proc(t: ^testing.T) {
+    data: Theme_Data
+    theme := make_display_test_theme(&data)
+    ed: Editor
+    editor_init(&ed)
+    defer editor_destroy(&ed)
+    strings.write_string(&ed.sb, "aaaaaa\n\nlast")
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    content := rl.Rectangle{10, 20, 24, 50}
+    origin := [2]f32{40, 60}
+    for zoom in ([?]f32{0.5, 0.77, 1, 2}) {
+        editor_display_begin(&ed, &theme, content, zoom, origin)
+        testing.expect_value(t, ed.display.layout_size, [2]f32{24, 50})
+        ed.display.scroll_pos.y = 10
+        editor_mouse_select(&ed, &theme, origin + [2]f32{15, 22} * zoom, true, true, false)
+        testing.expect_value(t, ed.state.selection[0], 5)
+        editor_mouse_select(&ed, &theme, origin + [2]f32{11, 32} * zoom, false, false, true)
+        testing.expect_value(t, editor_visual_range(&ed), [2]int{5, 7})
+    }
 }
 
 @(test)

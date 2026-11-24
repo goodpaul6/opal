@@ -4,7 +4,7 @@ import "core:strings"
 import "core:testing"
 import rl "vendor:raylib"
 
-@(private="file")
+@(private="package")
 set_test_clipboard :: proc(ed: ^Editor, clip: ^strings.Builder) {
     ed.state.clipboard_user_data = clip
     ed.state.set_clipboard = proc(data: rawptr, text: string) -> bool {
@@ -18,7 +18,7 @@ set_test_clipboard :: proc(ed: ^Editor, clip: ^strings.Builder) {
     }
 }
 
-@(private="file")
+@(private="package")
 test_clipboard_destroy_editor :: proc(ed: ^Editor) {
     for item in ed.undos do delete(item.data)
     for item in ed.redos do delete(item.data)
@@ -139,4 +139,42 @@ test_visual_d_cuts_whole_lines_and_can_be_undone :: proc(t: ^testing.T) {
         editor_handle_keypress(&ed, .R, {.CTRL})
         testing.expect_value(t, editor_get_text(&ed), c.after)
     }
+}
+
+@(test)
+test_keyboard_visual_selects_characters_in_both_directions :: proc(t: ^testing.T) {
+    ed: Editor
+    editor_init(&ed)
+    defer test_clipboard_destroy_editor(&ed)
+    clip := strings.builder_make()
+    defer strings.builder_destroy(&clip)
+    set_test_clipboard(&ed, &clip)
+    src :: "a e\u0301! done"
+    strings.write_string(&ed.sb, src)
+    ed.prev_frame_sel = {2, 2}
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+
+    live_editor_handle_input(&ed, nil, []rl.KeyboardKey{.V}, []rune{'v'}, {}, false, false)
+    testing.expect_value(t, ed.mode, Editor_Mode.VISUAL)
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{2, 5})
+    editor_handle_keypress(&ed, .L, {})
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{2, 6})
+    editor_handle_keypress(&ed, .H, {})
+    editor_handle_keypress(&ed, .H, {})
+    testing.expect_value(t, editor_visual_range(&ed), [2]int{1, 5})
+    editor_handle_keypress(&ed, .Y, {})
+    testing.expect_value(t, strings.to_string(clip), " e\u0301")
+    testing.expect_value(t, editor_get_text(&ed), src)
+
+    editor_handle_keypress(&ed, .W, {})
+    editor_handle_keypress(&ed, .W, {})
+    editor_handle_keypress(&ed, .W, {})
+    editor_handle_keypress(&ed, .V, {})
+    editor_handle_keypress(&ed, .E, {})
+    editor_handle_keypress(&ed, .D, {})
+    testing.expect_value(t, strings.to_string(clip), "done")
+    testing.expect_value(t, editor_get_text(&ed), "a e\u0301! ")
+    editor_handle_keypress(&ed, .U, {})
+    testing.expect_value(t, editor_get_text(&ed), src)
 }

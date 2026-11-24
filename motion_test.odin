@@ -125,3 +125,73 @@ test_editor_word_delete_and_undo :: proc(t: ^testing.T) {
         testing.expect_value(t, ed.state.selection, [2]int{c.caret, c.caret})
     }
 }
+
+@(test)
+test_editor_changes_keep_replacement_in_one_undo_step :: proc(t: ^testing.T) {
+    cases := [?]struct {
+        before: string,
+        offset: int,
+        motion: rl.KeyboardKey,
+        mods: Editor_Key_Mod_State,
+        after: string,
+    }{
+        {"café crème", 0, .W, {}, "X crème"},
+        {"cat dog", 2, .W, {}, "caX dog"},
+        {"cat dog", 2, .E, {}, "caX"},
+        {"abc\n", 2, .E, {}, "abX\n"},
+        {"one\n\ntwo\n", 4, .W, {}, "one\nX\ntwo\n"},
+        {"abc\n", 0, .ZERO, {}, "Xabc\n"},
+        {"aé! next", 0, .W, {.SHIFT}, "X next"},
+        {"aé! next", 0, .E, {}, "X! next"},
+        {"prev\n   line\nnext", 7, .C, {}, "prev\nX\nnext"},
+        {"prev\nline\nnext", 6, .J, {}, "prev\nX"},
+        {"left\nline\nright", 6, .K, {}, "X\nright"},
+        {"cat dog\nnext", 3, .FOUR, {.SHIFT}, "catX\nnext"},
+    }
+    for c in cases {
+        ed: Editor
+        editor_init(&ed)
+        defer test_clipboard_destroy_editor(&ed)
+        strings.write_string(&ed.sb, c.before)
+        ed.prev_frame_sel = {c.offset, c.offset}
+        editor_begin_frame(&ed)
+        defer editor_end_frame(&ed)
+
+        editor_handle_keypress(&ed, .C, {})
+        editor_handle_keypress(&ed, c.motion, c.mods)
+        testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
+        editor_handle_charpress(&ed, 'X')
+        editor_handle_keypress(&ed, .ESCAPE, {})
+        testing.expect_value(t, editor_get_text(&ed), c.after)
+        editor_handle_keypress(&ed, .U, {})
+        testing.expect_value(t, editor_get_text(&ed), c.before)
+        testing.expect_value(t, ed.state.selection[0], c.offset)
+        editor_handle_keypress(&ed, .R, {.CTRL})
+        testing.expect_value(t, editor_get_text(&ed), c.after)
+    }
+}
+
+@(test)
+test_editor_change_cancel_and_visual_line_change :: proc(t: ^testing.T) {
+    ed: Editor
+    editor_init(&ed)
+    defer test_clipboard_destroy_editor(&ed)
+    strings.write_string(&ed.sb, "one\ntwo\nlast")
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    editor_handle_keypress(&ed, .C, {})
+    editor_handle_keypress(&ed, .ESCAPE, {})
+    testing.expect_value(t, editor_get_text(&ed), "one\ntwo\nlast")
+    testing.expect_value(t, ed.mode, Editor_Mode.NORMAL)
+    testing.expect_value(t, len(ed.undos), 0)
+
+    editor_handle_keypress(&ed, .V, {.SHIFT})
+    editor_handle_keypress(&ed, .J, {})
+    editor_handle_keypress(&ed, .C, {})
+    testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
+    editor_handle_charpress(&ed, 'X')
+    editor_handle_keypress(&ed, .ESCAPE, {})
+    testing.expect_value(t, editor_get_text(&ed), "X\nlast")
+    editor_handle_keypress(&ed, .U, {})
+    testing.expect_value(t, editor_get_text(&ed), "one\ntwo\nlast")
+}

@@ -67,11 +67,16 @@ display_font_variant :: proc(theme: ^Theme, font: ^rl.Font) -> (variant: Theme_F
 }
 
 @(private="file")
-display_raster_font :: proc(theme: ^Theme, font: ^rl.Font) -> ^rl.Font {
-    if variant, ok := display_font_variant(theme, font); ok && theme.native_fonts[variant].texture.id != 0 {
-        return &theme.native_fonts[variant]
+display_raster_font :: proc(theme: ^Theme, font: ^rl.Font, rasters: ^Canvas_Font_Rasters) -> (^rl.Font, f32) {
+    if variant, ok := display_font_variant(theme, font); ok {
+        if rasters != nil {
+            if cached := canvas_font_raster(theme, rasters, variant); cached != nil {
+                return cached, f32(cached.baseSize) / f32(font.baseSize)
+            }
+        }
+        if theme.native_fonts[variant].texture.id != 0 do return &theme.native_fonts[variant], 0
     }
-    return font
+    return font, 0
 }
 
 // At default body zoom Quartz uses the lower half-pixel bin at 1x and
@@ -125,8 +130,10 @@ display_em_dash_in_case_context :: proc(before, after: string) -> bool {
 display_draw_text :: proc(
     theme: ^Theme, font: ^rl.Font, text: string, pos: [2]f32, color: rl.Color,
     previous: rune = 0, origin: [2]f32 = {}, dash_context: Display_Dash_Context = {},
+    zoom: f32 = 1,
+    rasters: ^Canvas_Font_Rasters = nil,
 ) {
-    raster := display_raster_font(theme, font)
+    raster, atlas_scale := display_raster_font(theme, font, rasters)
     metrics: ^Font_Metrics
     if variant, ok := display_font_variant(theme, font); ok do metrics = &theme.font_metrics[variant]
     pen := Display_Pen{pos.x, previous}
@@ -148,9 +155,9 @@ display_draw_text :: proc(
             index := rl.GetGlyphIndex(raster^, ch)
             src := raster.recs[index]
             if src.width > 0 && src.height > 0 {
-                p := [2]f32{x, pos.y} + origin
-                dst := display_glyph_destination(theme.pixel_scale, p, src, raster.glyphs[index])
-                if use_floor, half_rows := display_glyph_placement(theme, font, raster, index); use_floor {
+                p := [2]f32{x, pos.y} * zoom + origin
+                dst := display_glyph_destination(theme.pixel_scale, p, src, raster.glyphs[index], zoom, atlas_scale)
+                if use_floor, half_rows := display_glyph_placement(theme, font, raster, index); use_floor && zoom == 1 {
                     device_x, rows := display_glyph_phase(p.x * theme.pixel_scale.x, half_rows)
                     dst.x = (device_x + f32(raster.glyphs[index].offsetX)) / theme.pixel_scale.x
                     src.y += f32(rows)
@@ -158,7 +165,7 @@ display_draw_text :: proc(
                 if ch == '—' && case_y != 0 {
                     at := dash.start + offset
                     if display_em_dash_in_case_context(dash.source[:at], dash.source[at + len("—"):]) {
-                        dst.y += f32(case_y) / theme.pixel_scale.y
+                        dst.y += f32(case_y) * zoom / theme.pixel_scale.y
                     }
                 }
                 rl.DrawTexturePro(raster.texture, src, dst, {}, 0, color)
@@ -167,11 +174,14 @@ display_draw_text :: proc(
     }
 }
 
-// Only the rendered origin is rounded. Offsets and extents already belong to
-// the native bitmap, so each atlas texel covers exactly one framebuffer pixel.
-display_glyph_destination :: proc(scale, pos: [2]f32, src: rl.Rectangle, glyph: rl.GlyphInfo) -> rl.Rectangle {
-    origin := display_round_pixel(pos * scale) + {f32(glyph.offsetX), f32(glyph.offsetY)}
-    return {origin.x / scale.x, origin.y / scale.y, src.width / scale.x, src.height / scale.y}
+// Keep the pen pixel-aligned and scale the existing mask in canvas views.
+display_glyph_destination :: proc(
+    scale, pos: [2]f32, src: rl.Rectangle, glyph: rl.GlyphInfo, zoom: f32 = 1, atlas_scale: f32 = 0,
+) -> rl.Rectangle {
+    mask_scale := [2]f32{zoom, zoom}
+    if atlas_scale > 0 do mask_scale = scale * (zoom / atlas_scale)
+    origin := display_round_pixel(pos * scale) + [2]f32{f32(glyph.offsetX), f32(glyph.offsetY)} * mask_scale
+    return {origin.x / scale.x, origin.y / scale.y, src.width * mask_scale.x / scale.x, src.height * mask_scale.y / scale.y}
 }
 
 @(private="file")
@@ -224,18 +234,20 @@ display_blank_caret :: proc(font: ^rl.Font, metrics: ^Font_Metrics, normal: bool
 }
 
 @(private="file")
-display_block_bounds :: proc(theme: ^Theme, font: ^rl.Font, ch: rune, pos: [2]f32, advance: f32) -> (rect: rl.Rectangle, has_ink: bool) {
+display_block_bounds :: proc(
+    theme: ^Theme, font: ^rl.Font, ch: rune, pos: [2]f32, advance: f32, rasters: ^Canvas_Font_Rasters = nil,
+) -> (rect: rl.Rectangle, has_ink: bool) {
     rect = {pos.x, pos.y, max(f32(INSERT_CARET_W), advance), f32(font.baseSize)}
     if ch == ' ' || ch == '\t' do return
 
-    raster := display_raster_font(theme, font)
+    raster, atlas_scale := display_raster_font(theme, font, rasters)
     index := rl.GetGlyphIndex(raster^, ch)
     src := raster.recs[index]
     if src.width <= 0 || src.height <= 0 do return
 
     // Include the native bitmap's overhang relative to the pen. Leave origin
     // snapping until draw time, when the viewport offset is known.
-    ink := display_glyph_destination(theme.pixel_scale, {}, src, raster.glyphs[index])
+    ink := display_glyph_destination(theme.pixel_scale, {}, src, raster.glyphs[index], atlas_scale = atlas_scale)
     left, top := min(0, ink.x), min(0, ink.y)
     right, bottom := max(rect.width, ink.x + ink.width), max(rect.height, ink.y + ink.height)
     return {pos.x + left, pos.y + top, right - left, bottom - top}, true
@@ -243,6 +255,53 @@ display_block_bounds :: proc(theme: ^Theme, font: ^rl.Font, ch: rune, pos: [2]f3
 
 // Layout emits one stack value at a time. A nil sink measures only the caret.
 Display_Emit :: proc(data: rawptr, cmd: Display_Command)
+
+Display_Hit_Test :: struct {
+    point: [2]f32,
+    offset: int,
+}
+
+@(private="file")
+display_hit_row :: proc(hit: ^Display_Hit_Test, top, height: f32) -> bool {
+    return hit != nil && top <= hit.point.y && hit.point.y < top + height
+}
+
+@(private="file")
+display_hit_chunk :: proc(
+    hit: ^Display_Hit_Test, text: string, start: int, inset: f32,
+    pen: Display_Pen, font: ^rl.Font, metrics: ^Font_Metrics,
+) -> bool {
+    pen := pen
+    for ch, offset in text {
+        x := display_pen_step(&pen, font, metrics, ch)
+        if hit.point.x < inset + (x + pen.x) / 2 {
+            hit.offset = start + offset
+            return true
+        }
+    }
+    return false
+}
+
+display_selection_color :: proc(theme: ^Theme) -> rl.Color {
+    accent := theme.data.accent_color if theme.data.accent_color.a != 0 else theme.data.fg_color
+    return rl.ColorLerp(theme.data.bg_color, accent, 0.25)
+}
+
+@(private="file")
+display_selection_span :: proc(
+    text: string, low, high: int, pen: Display_Pen, end_x: f32,
+    font: ^rl.Font, metrics: ^Font_Metrics,
+) -> [2]f32 {
+    if low == 0 && high == len(text) do return {pen.x, end_x}
+    pen := pen
+    left := pen.x
+    for ch, offset in text {
+        x := display_pen_step(&pen, font, metrics, ch)
+        if offset == low do left = x
+        if offset == high do return {left, x}
+    }
+    return {left, end_x}
+}
 
 @(private="file")
 display_line_height :: proc(theme: ^Theme, variant: Theme_Font_Variant) -> f32 {
@@ -264,9 +323,9 @@ display_emit_block_row :: proc(
     y, width, height: f32, selected: bool,
 ) {
     if selected {
-        accent := theme.data.accent_color if theme.data.accent_color.a != 0 else theme.data.fg_color
-        fill := rl.ColorLerp(theme.data.bg_color, accent, 0.25)
-        emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = width, h = height, color = fill}})
+        emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{
+            w = width, h = height, color = display_selection_color(theme),
+        }})
     } else if line.fenced && theme.data.code_background.a != 0 {
         emit(emit_data, Display_Command{pos = {0, y}, sub = Display_Command_Rect{w = width, h = height, color = theme.data.code_background}})
     }
@@ -313,13 +372,26 @@ display_command_gen :: proc(
     emit_data: rawptr = nil,
     stop_y: f32 = -1,
     viewport_top: f32 = -max(f32),
+    hit: ^Display_Hit_Test = nil,
+    preview: ^string = nil,
+    rasters: ^Canvas_Font_Rasters = nil,
 ) -> (caret_rect: rl.Rectangle) {
     // TODO(Apaar): Handle horizontal scroll
-    src := string(ed.sb.buf[:])
-    sel_pos := ed.state.selection[0]
-    visual := ed.mode == .VISUAL
-    normal := ed.mode == .NORMAL || visual
-    selected_lines := editor_visual_lines(ed) if visual else [2]int{}
+    src: string
+    sel_pos := -1
+    visual, characterwise, block_caret: bool
+    selected_lines, selected_bytes: [2]int
+    if preview != nil {
+        src = preview^
+    } else {
+        src = string(ed.sb.buf[:])
+        sel_pos = ed.state.selection[0]
+        visual = ed.mode == .VISUAL
+        characterwise = visual && ed.visual_characterwise
+        block_caret = ed.mode == .NORMAL || visual
+        if visual && !characterwise do selected_lines = editor_visual_lines(ed)
+        if characterwise do selected_bytes = editor_visual_range(ed)
+    }
     cursor_glyph: Display_Command_Text
     cursor_glyph_pos: [2]f32
     cursor_dash_context: Display_Dash_Context
@@ -328,7 +400,7 @@ display_command_gen :: proc(
     body_height := display_line_height(theme, .BODY)
     checkpoint: Display_Checkpoint
     last_checkpoint_offset := 0
-    use_checkpoints := viewport_top != -max(f32)
+    use_checkpoints := preview == nil && viewport_top != -max(f32)
     if use_checkpoints {
         if ed.display.checkpoint_width != bounds_size.x || ed.display.checkpoint_zoom != theme.zoom_level {
             clear(&ed.display.checkpoints)
@@ -338,7 +410,7 @@ display_command_gen :: proc(
         if len(ed.display.checkpoints) > 0 {
             last_checkpoint_offset = ed.display.checkpoints[len(ed.display.checkpoints) - 1].offset
         }
-        if emit == nil {
+        if emit == nil && hit == nil {
             checkpoint = display_find_checkpoint(ed.display.checkpoints[:], sel_pos, max(f32))
         } else {
             // Keep the same glyph overhang allowance as display_command_draw.
@@ -371,7 +443,7 @@ display_command_gen :: proc(
     row_line_start := checkpoint.offset
 
     layout: for node in parser_next_node(&p) {
-        if emit == nil && caret_rect.height > 0 do break
+        if emit == nil && hit == nil && caret_rect.height > 0 do break
         if stop_y >= 0 && draw_pos.y >= stop_y do break
         line_variant = display_line_variant(p.line)
         theme_ensure_font(theme, line_variant)
@@ -380,18 +452,28 @@ display_command_gen :: proc(
         inset := display_block_inset(theme, p.line, bounds_size.x)
         text_width := bounds_size.x - inset * 2
         start, end := node.extents[0], node.extents[1]
-        selected := visual && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
+        selected := visual && !characterwise && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
         // Half-open extents assign each caret offset once. A newline owns
         // the caret before it, not the caret at the start of the next line.
         contains_caret := start <= sel_pos && sel_pos < end
 
         #partial switch sub in node.sub {
             case Node_Newline:
+                if display_hit_row(hit, draw_pos.y, line_height) {
+                    hit.offset = start
+                    break layout
+                }
                 if emit != nil && !decorated {
                     display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height, selected)
                 }
+                if emit != nil && characterwise && selected_bytes[0] <= start && start < selected_bytes[1] {
+                    emit(emit_data, Display_Command{pos = {draw_pos.x + inset, draw_pos.y}, sub = Display_Command_Rect{
+                        w = display_glyph_advance(&theme.fonts[line_variant], ' ', &theme.font_metrics[line_variant]),
+                        h = line_height, color = display_selection_color(theme),
+                    }})
+                }
                 if contains_caret {
-                    caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                    caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], block_caret,
                                                      {draw_pos.x + inset, draw_pos.y}, line_height)
                 }
                 draw_pos = {0, draw_pos.y + line_height}
@@ -435,6 +517,10 @@ display_command_gen :: proc(
                     // Drop whitespace at a soft wrap. If the logical line
                     // ends here, don't add an extra visual line before it.
                     if !sub.all_spaces || (end < len(src) && src[end] != '\n') {
+                        if display_hit_row(hit, draw_pos.y, line_height) {
+                            hit.offset = start
+                            break layout
+                        }
                         draw_pos = {0, draw_pos.y + line_height}
                         line_height = min_line_height
                         previous = 0
@@ -442,7 +528,7 @@ display_command_gen :: proc(
                     }
                     if sub.all_spaces {
                         if contains_caret {
-                            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+                            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], block_caret,
                                                              {draw_pos.x + inset, draw_pos.y}, line_height)
                         }
                         continue
@@ -472,10 +558,25 @@ display_command_gen :: proc(
                         }
                     }
 
+                    chunk := text[chunk_start:chunk_end]
+                    chunk_offset := start + chunk_start
+                    hit_row := display_hit_row(hit, draw_pos.y, line_height)
+                    pen_start := Display_Pen{draw_pos.x, previous}
+                    if hit_row && display_hit_chunk(hit, chunk, chunk_offset, inset, pen_start, font, metrics) {
+                        break layout
+                    }
                     if emit != nil {
                         if !decorated {
                             display_emit_block_row(emit, emit_data, theme, p.line, draw_pos.y, bounds_size.x, line_height, selected)
                             decorated = true
+                        }
+                        low := max(selected_bytes[0] - chunk_offset, 0)
+                        high := min(selected_bytes[1] - chunk_offset, len(chunk))
+                        if characterwise && low < high {
+                            span := display_selection_span(chunk, low, high, pen_start, pen.x, font, metrics)
+                            emit(emit_data, Display_Command{pos = {span[0] + inset, draw_pos.y}, sub = Display_Command_Rect{
+                                w = span[1] - span[0], h = line_height, color = display_selection_color(theme),
+                            }})
                         }
                         color := theme.data.fg_color
                         if p.line.quoted && theme.data.accent_color.a == 0 {
@@ -502,9 +603,9 @@ display_command_gen :: proc(
                         emit(emit_data, Display_Command{
                             pos = {draw_pos.x + inset, draw_pos.y + offset_y},
                             previous = previous,
-                            dash_context = {src, start + chunk_start},
+                            dash_context = {src, chunk_offset},
                             sub = Display_Command_Text{
-                                text = text[chunk_start:chunk_end],
+                                text = chunk,
                                 font = font,
                                 color = color,
                             },
@@ -522,10 +623,10 @@ display_command_gen :: proc(
                                 pos := [2]f32{x + inset, draw_pos.y + row_top}
                                 caret_rect = {pos.x, pos.y, INSERT_CARET_W, font_height}
                                 if heading_code do caret_rect.height = prose_height
-                                if normal {
+                                if block_caret {
                                     pos.y = draw_pos.y + offset_y
                                     has_ink: bool
-                                    caret_rect, has_ink = display_block_bounds(theme, font, ch, pos, caret_pen.x - x)
+                                    caret_rect, has_ink = display_block_bounds(theme, font, ch, pos, caret_pen.x - x, rasters)
                                     if has_ink {
                                         cursor_glyph_pos = pos
                                         cursor_glyph = {text[offset:offset+size], font, theme.data.bg_color}
@@ -542,8 +643,12 @@ display_command_gen :: proc(
                     previous = pen.previous
                     line_height = max(line_height, font_height)
                     chunk_start = chunk_end
-                    if emit == nil && caret_rect.height > 0 do break layout
+                    if emit == nil && hit == nil && caret_rect.height > 0 do break layout
                     if chunk_start < len(text) {
+                        if hit_row {
+                            hit.offset = start + chunk_end
+                            break layout
+                        }
                         draw_pos = {0, draw_pos.y + line_height}
                         line_height = min_line_height
                         previous = 0
@@ -553,17 +658,17 @@ display_command_gen :: proc(
         }
     }
 
-    selected_empty_line := visual && row_line_start == len(src) && selected_lines[1] == len(src)
+    selected_empty_line := visual && !characterwise && row_line_start == len(src) && selected_lines[1] == len(src)
     if (sel_pos == len(src) || selected_empty_line) && (stop_y < 0 || draw_pos.y < stop_y) {
         eof_line := p.line
         if p.line_start == len(src) do eof_line = {fenced = p.fence_length != 0}
         if emit != nil && !decorated {
-            selected := visual && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
+            selected := visual && !characterwise && selected_lines[0] <= row_line_start && row_line_start <= selected_lines[1]
             display_emit_block_row(emit, emit_data, theme, eof_line, draw_pos.y, bounds_size.x, line_height, selected)
         }
         if sel_pos == len(src) {
             inset := display_block_inset(theme, eof_line, bounds_size.x)
-            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], normal,
+            caret_rect = display_blank_caret(&theme.fonts[line_variant], &theme.font_metrics[line_variant], block_caret,
                                              {draw_pos.x + inset, draw_pos.y}, line_height)
         }
     }
@@ -575,14 +680,14 @@ display_command_gen :: proc(
         caret_rect.width = right - caret_rect.x
     } else {
         // At an exactly filled edge, keep the blank or thin caret visible.
-        if normal do caret_rect.width = min(caret_rect.width, bounds_size.x)
+        if block_caret do caret_rect.width = min(caret_rect.width, bounds_size.x)
         caret_rect.x = min(caret_rect.x, max(f32(0), bounds_size.x - caret_rect.width))
     }
 
     if emit != nil {
         floor_left := false
         if cursor_glyph.text != "" {
-            raster := display_raster_font(theme, cursor_glyph.font)
+            raster, _ := display_raster_font(theme, cursor_glyph.font, rasters)
             ch, _ := utf8.decode_rune(cursor_glyph.text)
             floor_left, _ = display_glyph_placement(theme, cursor_glyph.font, raster, rl.GetGlyphIndex(raster^, ch))
         }
@@ -608,21 +713,26 @@ Display_Viewport :: struct {
     theme: ^Theme,
     origin: [2]f32,
     top, bottom: f32,
+    zoom: f32,
+    rasters: ^Canvas_Font_Rasters,
 }
 
 display_command_draw :: proc(data: rawptr, cmd: Display_Command) {
     viewport := cast(^Display_Viewport)data
-    pos := cmd.pos + viewport.origin
+    zoom := viewport.zoom
+    pos := cmd.pos * zoom + viewport.origin
     if pos.y >= viewport.bottom do return
 
     switch sub in cmd.sub {
         case Display_Command_Text:
             // Include a row of slack for font ascenders/descenders and padding.
-            if pos.y + 2 * f32(sub.font.baseSize) <= viewport.top do return
-            display_draw_text(viewport.theme, sub.font, sub.text, cmd.pos, sub.color, cmd.previous, viewport.origin, cmd.dash_context)
+            if pos.y + 2 * f32(sub.font.baseSize) * zoom <= viewport.top do return
+            display_draw_text(viewport.theme, sub.font, sub.text, cmd.pos, sub.color, cmd.previous,
+                              viewport.origin, cmd.dash_context, zoom, viewport.rasters)
 
         case Display_Command_Rect:
-            if pos.y + sub.h <= viewport.top do return
-            rl.DrawRectangleRec(display_snap_rect(viewport.theme, {pos.x, pos.y, sub.w, sub.h}, sub.floor_left), sub.color)
+            if pos.y + sub.h * zoom <= viewport.top do return
+            rect := rl.Rectangle{pos.x, pos.y, sub.w * zoom, sub.h * zoom}
+            rl.DrawRectangleRec(display_snap_rect(viewport.theme, rect, sub.floor_left && zoom == 1), sub.color)
     }
 }

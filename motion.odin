@@ -60,7 +60,7 @@ word_class :: proc(buf: []byte, pos: int, big_word: bool) -> Word_Class {
     return .Punctuation
 }
 
-@(private="file")
+@(private="package")
 word_previous_char :: proc(buf: []byte, pos: int) -> int {
     pos := pos
     for pos > 0 {
@@ -73,7 +73,7 @@ word_previous_char :: proc(buf: []byte, pos: int) -> int {
     return pos
 }
 
-@(private="file")
+@(private="package")
 word_next_char :: proc(buf: []byte, pos: int) -> int {
     ch, size := utf8.decode_rune(buf[pos:])
     next := pos + size
@@ -210,4 +210,24 @@ word_delete_range :: proc(buf: []byte, pos: int, motion: Word_Motion, big_word: 
         if buf[tail] == '\n' do return {first_line_start, tail + 1}
     }
     return {low, exclusive_end}
+}
+
+word_change_range :: proc(buf: []byte, pos: int, motion: Word_Motion, big_word: bool) -> [2]int {
+    start := word_caret_start(buf, pos)
+    if start == len(buf) do return {start, start}
+    if motion == .End {
+        end := word_destination(buf, start, .End, big_word)
+        if end == len(buf) && buf[end - 1] == '\n' do return {start, end - 1}
+        return {start, word_next_char(buf, end) if end < len(buf) else end}
+    }
+    class := word_class(buf, start, big_word)
+    if motion == .Next && class == .Empty_Line do return {start, start}
+    if motion == .Next && class != .Blank && class != .Empty_Line {
+        end := word_next_char(buf, start)
+        for end < len(buf) && word_class(buf, end, big_word) == class {
+            end = word_next_char(buf, end)
+        }
+        return {start, end}
+    }
+    return word_delete_range(buf, start, motion, big_word)
 }

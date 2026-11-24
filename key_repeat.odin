@@ -1,11 +1,11 @@
 package main
 
-import "core:fmt"
 import rl "vendor:raylib"
 
 Key_Repeat_State_Key :: struct {
     is_pressed: bool,
     was_pressed: bool,
+    pressed_at: f64,
     repeat_time: f64,
 }
 
@@ -13,19 +13,22 @@ Key_Repeat_State :: struct {
     keys: #sparse [rl.KeyboardKey]Key_Repeat_State_Key,
 }
 
-key_repeat_begin_frame :: proc(state: ^Key_Repeat_State, repeat_delay_for_ms: int) {
+key_repeat_begin_frame :: proc(state: ^Key_Repeat_State, now: f64) {
     for &key, ord in state.keys {
         key.is_pressed = rl.IsKeyDown(cast (rl.KeyboardKey) ord)
         
         if key.is_pressed && !key.was_pressed {
-            key.repeat_time = rl.GetTime() + f64(repeat_delay_for_ms) / 1000
+            key.pressed_at = now
+            key.repeat_time = now
         }
     }
 }
 
 key_repeat_should_repeat :: proc(
     state: ^Key_Repeat_State,
-    kkey: rl.KeyboardKey, 
+    kkey: rl.KeyboardKey,
+    now: f64,
+    initial_delay_ms: int,
     repeat_every_ms: int,
 ) -> bool {
     key := &state.keys[kkey]
@@ -34,11 +37,11 @@ key_repeat_should_repeat :: proc(
         return false
     }
 
-    if rl.GetTime() < key.repeat_time {
+    if now < max(key.repeat_time, key.pressed_at + f64(initial_delay_ms) / 1000) {
         return false
     }
 
-    key.repeat_time += f64(repeat_every_ms) / 1000
+    key.repeat_time = now + f64(repeat_every_ms) / 1000
     return true
 }
 
