@@ -2,17 +2,20 @@
 
 A native alternative to Obsidian. Only has the features I care about.
 
+Use `:theme` to toggle between dark and light, or choose one with `:theme dark` or `:theme light`. The command works in the canvas and the Markdown editor.
+
 ## Canvas
 
 Launch Opal to start a blank board, or pass a `.canvas` filename to reopen one.
 
 - Double-click empty space to create a Markdown card. You can also press `n` or use **New card**.
-- Drag a card to move it, or drag its bottom-right handle to resize it along the grid. To connect cards, drag from a side handle and release near the side you want on the destination card.
+- Select one or more cards and click **Color** to pick a tint. With the keyboard, open `:col` (short for `:color`), move with `j`/`k` or the arrow keys, and press Enter. Choose **Default** to clear the tint.
+- Drag a card to move it along the visible grid, or drag its bottom-right handle to resize it. When dragging a selection, the card you grab snaps and the others keep their relative positions. To connect cards, drag from a side handle and release near the side you want on the destination card.
 - Double-click an arrow or select it and press Enter to edit its label in place with the same editor as a card. Enter adds a line break. Press Cmd/Ctrl+Enter or click outside to finish. An empty label removes it.
 - Drag empty space to pan. Scroll or hold Cmd/Ctrl+Plus or Minus to zoom the board. Press `f` to center the selection at the current zoom, or Shift+F to fit the whole board. Select a card or arrow and press Delete to remove it. On the board, Cmd/Ctrl+Z undoes a change and Cmd/Ctrl+Shift+Z redoes it.
 - Card text, padding, and arrow labels scale with board zoom. Wrapping stays the same. Opal reuses glyphs while you scroll and sharpens the text at the new zoom when scrolling stops. The expanded editor uses the regular writing font size.
 - Double-click a card or select it and press Enter to edit Markdown in place with Opal's Vim bindings. With a card selected or open, press Cmd/Ctrl+Shift+Enter for a full-page editor. Press the shortcut again or choose **Collapse** to return to the same card in place. Click outside an inline editor, choose **Done**, press Cmd/Ctrl+Enter, or use `:q` to finish editing. The card stores its text inside the canvas file.
-- **Save** or Cmd/Ctrl+S saves the whole board from either view. On the canvas, press `:` for commands such as `:w`, `:w "path.canvas"`, `:wq`, and `:q`.
+- **Save** or Cmd/Ctrl+S saves the whole board from either view. On the canvas, press `:` to enter commands such as `:w`, `:w "path.canvas"`, `:wq`, and `:q` in the bottom status line.
 - **Open**, Cmd/Ctrl+O, or `:e "path.canvas"` opens a board. If the current board has unsaved edits, Enter saves them, `d` discards them, and Esc cancels. Use `:e! "path.canvas"` to open directly and discard unsaved edits.
 
 Boards use [JSON Canvas 1.0](https://jsoncanvas.org/spec/1.0/). Pass a Markdown filename to Opal for the standalone editor, or launch with `--markdown` for a blank note.
@@ -26,6 +29,16 @@ Boards use [JSON Canvas 1.0](https://jsoncanvas.org/spec/1.0/). Pass a Markdown 
 - Press `g c` to start an arrow from the selected card. Navigate to an existing card and press Enter, or press `a`, `o`, or `O` to create and connect a new card. While connecting, hold Shift with `h`/`j`/`k`/`l` to choose the destination side, or hold Option/Alt to choose the source side.
 - The same directional keys move between cards and arrows. Press Enter on a highlighted arrow to edit its label. Tab also works as a shortcut to a nearby arrow.
 - Press `d` or `x` to remove the selected card or arrow, `u` to undo, or Ctrl+R to redo.
+
+### Groups
+
+- Highlight a card and press `v`. Extend the selection with the directional keys, then press Enter to wrap it in a group. Press `g b` to wrap just the highlighted item, or to create an empty group when nothing is selected.
+- Shift-click to add a card to the selection. Cmd-click on macOS or Ctrl-click elsewhere toggles a card. Press Enter to create a group, or drag any selected card onto an existing group to add the whole selection.
+- Press `i` on a group to edit its title in place. Press `g p` from a card or nested group to select its parent. With a group selected, `a`, `o`, and `O` add a card inside it.
+- Press `m` to move a group and its contents together or `r` to resize its frame. The frame cannot shrink past its contents. Press `d` to remove the frame and keep its contents.
+- Hold Shift and drag from empty space to add a region to the selection, then press Enter to box it. Drag a group's header to move it. A destination group highlights as you drag over it and expands around the items you drop.
+
+Titles use the JSON Canvas group `label` field. Opal stores nesting in `opalParent` and reads nesting from box geometry when importing groups without that field.
 
 ## Writing Markdown
 

@@ -8,9 +8,14 @@ import "core:fmt"
 // Who knows...
 
 // TODO(Apaar): Return error enum
-command_run :: proc(cmd: ^Command, ed: ^Editor) -> bool {
-    if ed.canvas != nil do return canvas_run_command(ed.canvas, ed, cmd)
-    switch c in cmd {
+command_run :: proc(cmd: ^Command, ed: ^Editor, board: ^Canvas = nil) -> bool {
+    if palette, ok := cmd^.(Command_Theme); ok {
+        ed.theme_request = palette.choice
+        return true
+    }
+    canvas := board if board != nil else ed.canvas
+    if canvas != nil do return canvas_run_command(canvas, ed, cmd)
+    #partial switch c in cmd {
         case Command_Edit: {
             assert(c.filename != "")
 

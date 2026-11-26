@@ -27,6 +27,7 @@
       "fromNode": "opal-9",
       "fromSide": "right",
       "id": "opal-5",
+      "label": "Get upload links, list, retrieve",
       "toNode": "opal-a",
       "toSide": "left"
     },
@@ -41,24 +42,60 @@
     {
       "fromNode": "opal-6",
       "fromSide": "right",
-      "id": "opal-b",
-      "toNode": "opal-8",
+      "id": "opal-10",
+      "toNode": "opal-3",
       "toSide": "left"
+    },
+    {
+      "fromNode": "opal-1",
+      "fromSide": "top",
+      "id": "opal-14",
+      "label": "Read input file and write output file to",
+      "toNode": "opal-3",
+      "toSide": "top"
+    },
+    {
+      "fromNode": "opal-e",
+      "fromSide": "right",
+      "id": "opal-15",
+      "label": "Store metadata about file",
+      "toNode": "opal-11",
+      "toSide": "left"
+    },
+    {
+      "fromNode": "opal-3",
+      "fromSide": "top",
+      "id": "opal-16",
+      "label": "Store result metadata",
+      "toNode": "opal-11",
+      "toSide": "right"
     }
   ],
   "nodes": [
     {
+      "height": 896,
+      "id": "opal-c",
+      "label": "Group",
+      "opalParent": "",
+      "type": "group",
+      "width": 2548,
+      "x": -336,
+      "y": -336
+    },
+    {
       "height": 252,
       "id": "opal-9",
+      "opalParent": "opal-c",
       "text": "# Frontend\n\nThis is where the user can upload files. Probably just React SPA.",
       "type": "text",
       "width": 252,
-      "x": -28,
+      "x": -280,
       "y": 196
     },
     {
       "height": 252,
       "id": "opal-a",
+      "opalParent": "opal-c",
       "text": "# Load balancer\n\nThis sits in front of our API servers.",
       "type": "text",
       "width": 252,
@@ -68,7 +105,8 @@
     {
       "height": 252,
       "id": "opal-e",
-      "text": "# API server\n\n```\nGET /files/upload_url\nPOST /files\nGET /files\n```",
+      "opalParent": "opal-c",
+      "text": "# API server\n\n```\nGET /files/upload_url\nPOST /files\nGET /files\nGET /files/:id\n```\n\nWhen we `POST /files`, our frontend has already validated the CSV to make sure it is under the row limit. However, our processor performs the validation as well. This avoids bogging down the API server.",
       "type": "text",
       "width": 336,
       "x": 728,
@@ -77,7 +115,8 @@
     {
       "height": 224,
       "id": "opal-1",
-      "text": "# Input files S3 bucket\n\nStores input files. Upon initial upload, files are tagged to be deleted within an hour. This tag is removed once the file is queued for processing.",
+      "opalParent": "opal-c",
+      "text": "# S3 bucket\n\nStores input files. Upon initial upload, files are tagged to be deleted within an hour. This tag is removed once the file is queued for processing.",
       "type": "text",
       "width": 336,
       "x": 728,
@@ -86,6 +125,7 @@
     {
       "height": 252,
       "id": "opal-6",
+      "opalParent": "opal-c",
       "text": "# SQS Queue\n\nStandard queue, nothing fancy required unless we have hard fairness guarantees.",
       "type": "text",
       "width": 252,
@@ -93,13 +133,34 @@
       "y": 196
     },
     {
+      "height": 364,
+      "id": "opal-3",
+      "label": "Workers",
+      "opalParent": "opal-c",
+      "type": "group",
+      "width": 308,
+      "x": 1848,
+      "y": 140
+    },
+    {
       "height": 252,
       "id": "opal-8",
+      "opalParent": "opal-3",
       "text": "# Worker\n\nThis processes files. We scale up this worker based on queue depth.",
       "type": "text",
       "width": 252,
-      "x": 1708,
-      "y": 196
+      "x": 1876,
+      "y": 224
+    },
+    {
+      "height": 153,
+      "id": "opal-11",
+      "opalParent": "opal-c",
+      "text": "# Database\n\nKeeps track of the status of every file, and the S3 keys.",
+      "type": "text",
+      "width": 252,
+      "x": 1400,
+      "y": -196
     }
   ]
 }

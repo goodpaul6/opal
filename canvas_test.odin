@@ -4,8 +4,295 @@ import "core:encoding/json"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:strings"
 import "core:testing"
 import rl "vendor:raylib"
+
+@(test)
+test_canvas_card_colors_apply_to_selection_and_round_trip :: proc(t: ^testing.T) {
+    dir, err := os.make_directory_temp("", "opal-canvas-colors-*", context.temp_allocator)
+    if !testing.expect(t, err == nil) do return
+    defer os.remove_all(dir)
+    path := os.join_path({dir, "colors.canvas"}, context.temp_allocator) or_else ""
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    first := canvas_add_card(&board, 0, 0)
+    second := canvas_add_card(&board, 300, 0)
+    third := canvas_add_card(&board, 600, 0)
+    board.selected = first
+    canvas_mouse_pick(&board, third, false)
+    canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, {800, 600})
+    canvas_prompt_input(&board, &ed, {.ENTER}, {'c', 'o', 'l'}, {})
+    testing.expect(t, board.color_picker_open)
+    history := len(board.undo)
+    theme: Theme
+    canvas_color_picker_input(&board, &theme, {.J, .J, .J, .J, .J, .K, .ENTER}, 800, 600)
+    testing.expect(t, !board.color_picker_open)
+    canvas_set_selected_color(&board, .SAGE)
+    testing.expect_value(t, len(board.undo), history + 1)
+    nodes := canvas_items(&board, "nodes")
+    testing.expect_value(t, canvas_string(nodes[first - 1].(json.Object), "color"), "4")
+    testing.expect_value(t, canvas_string(nodes[second - 1].(json.Object), "color"), "")
+    testing.expect_value(t, canvas_string(nodes[third - 1].(json.Object), "color"), "4")
+    canvas_step_history(&board, false)
+    nodes = canvas_items(&board, "nodes")
+    testing.expect_value(t, canvas_string(nodes[first - 1].(json.Object), "color"), "")
+    canvas_step_history(&board, true)
+    if !testing.expect(t, canvas_save(&board, path)) do return
+
+    loaded: Canvas
+    canvas_init(&loaded)
+    defer canvas_destroy(&loaded)
+    if !testing.expect(t, canvas_open(&loaded, path)) do return
+    loaded.selected = third
+    testing.expect(t, canvas_open_color_picker(&loaded))
+    testing.expect_value(t, loaded.color_choice, Canvas_Card_Color.SAGE)
+    canvas_set_selected_color(&loaded, .DEFAULT)
+    loaded_card := canvas_items(&loaded, "nodes")[third - 1].(json.Object)
+    testing.expect(t, "color" not_in loaded_card)
+}
+
+@(test)
+test_canvas_card_tints_adapt_to_theme_and_read_hex :: proc(t: ^testing.T) {
+    data: Theme_Data
+    dark, dark_ok := canvas_card_color_tint(&data, "5")
+    data.light = true
+    light, light_ok := canvas_card_color_tint(&data, "5")
+    testing.expect(t, dark_ok && light_ok && dark != light)
+    testing.expect_value(t, light, rl.Color{0x59, 0x7B, 0x75, 0xFF})
+    hex, hex_ok := canvas_card_color_tint(&data, "#A65B33")
+    testing.expect(t, hex_ok)
+    testing.expect_value(t, hex, rl.Color{0xA6, 0x5B, 0x33, 0xFF})
+}
+
+@(test)
+test_canvas_drops_mouse_selection_into_existing_group :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    size := [2]f32{1400, 900}
+    board.selected = canvas_add_card(&board, 1008, 560)
+    right := canvas_create_group(&board, size)
+    first := canvas_add_card(&board, 0, 280)
+    skipped := canvas_add_card(&board, 280, 280)
+    last := canvas_add_card(&board, 560, 280)
+    canvas_connect(&board, first, last, .RIGHT, .LEFT)
+    board.selected = first
+    nodes := canvas_items(&board, "nodes")
+    original_group := canvas_node_rect(nodes[right - 1].(json.Object))
+    original_card := canvas_node_rect(nodes[last - 1].(json.Object))
+    original_history := len(board.undo)
+
+    canvas_mouse_pick(&board, skipped, false)
+    canvas_mouse_pick(&board, last, true)
+    canvas_mouse_pick(&board, skipped, true)
+    testing.expect_value(t, len(board.visual_nodes), 2)
+    testing.expect(t, canvas_visual_contains(&board, first) && canvas_visual_contains(&board, last))
+    testing.expect_value(t, board.selected, last)
+    testing.expect(t, board.visual)
+    testing.expect_value(t, len(board.undo), original_history)
+
+    canvas_prepare_selection_drag(&board)
+    change := Canvas_Geometry{last, false, canvas_drag_move_position(original_card, {480, 303}, board.zoom)}
+    board.drag_geometry = change
+    preview := canvas_positioned_node(&board, nodes[last - 1].(json.Object))
+    testing.expect_value(t, preview.x, f32(1036))
+    testing.expect_value(t, canvas_positioned_node(&board, nodes[first - 1].(json.Object)).x, f32(476))
+    testing.expect_value(t, canvas_positioned_node(&board, nodes[skipped - 1].(json.Object)).x, f32(280))
+    target := canvas_drop_group_at(&board, {1040, 592})
+    testing.expect_value(t, target, right)
+    canvas_finish_selection_drag(&board, change, target)
+    testing.expect_value(t, board.selected, last)
+    testing.expect_value(t, canvas_parent(&board, first), right)
+    testing.expect_value(t, canvas_parent(&board, last), right)
+    testing.expect_value(t, canvas_parent(&board, skipped), 0)
+    testing.expect_value(t, canvas_node_rect(nodes[last - 1].(json.Object)), preview)
+    testing.expect(t, canvas_contains_rect(canvas_node_rect(nodes[right - 1].(json.Object)), preview))
+    testing.expect_value(t, len(canvas_items(&board, "edges")), 1)
+    testing.expect_value(t, len(board.undo), original_history + 1)
+    canvas_step_history(&board, false)
+    restored := canvas_items(&board, "nodes")[right - 1].(json.Object)
+    testing.expect_value(t, canvas_node_rect(restored), original_group)
+    testing.expect_value(t, canvas_parent(&board, first), 0)
+    testing.expect_value(t, canvas_node_rect(canvas_items(&board, "nodes")[last - 1].(json.Object)), original_card)
+    canvas_step_history(&board, true)
+    testing.expect_value(t, canvas_parent(&board, last), right)
+}
+
+@(test)
+test_canvas_drag_skips_own_subgroup_as_drop_target :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    screen := [2]f32{800, 600}
+    board.selected = canvas_add_card(&board, 280, 280)
+    canvas_create_group(&board, screen)
+    outer := canvas_create_group(&board, screen)
+    inner := outer + 1
+    canvas_mouse_pick(&board, inner, false)
+    canvas_prepare_selection_drag(&board)
+    testing.expect_value(t, canvas_parent(&board, inner), outer)
+    testing.expect_value(t, len(board.drag_members), 1)
+    testing.expect_value(t, board.drag_members[0], outer)
+    inner_rect := canvas_rect(&board, canvas_items(&board, "nodes")[inner - 1].(json.Object))
+    testing.expect_value(t, canvas_drop_group_at(&board, canvas_center(inner_rect)), 0)
+    testing.expect_value(t, canvas_parent(&board, outer), 0)
+}
+
+@(test)
+test_canvas_visual_enter_wraps_and_titles_a_group :: proc(t: ^testing.T) {
+    dir, err := os.make_directory_temp("", "opal-canvas-group-*", context.temp_allocator)
+    if !testing.expect(t, err == nil) do return
+    defer os.remove_all(dir)
+    path := os.join_path({dir, "plan.canvas"}, context.temp_allocator) or_else ""
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    size := [2]f32{1000, 720}
+    first := canvas_add_card(&board, 84, 168)
+    second := canvas_add_card(&board, 448, 168)
+    canvas_connect(&board, first, second, .RIGHT, .LEFT)
+    board.selected = first
+
+    canvas_keyboard_key(&board, &ed, .V, {}, size)
+    canvas_keyboard_key(&board, &ed, .L, {}, size)
+    testing.expect_value(t, len(board.visual_nodes), 2)
+    canvas_keyboard_key(&board, &ed, .ENTER, {}, size)
+    testing.expect(t, !board.visual)
+    nodes := canvas_items(&board, "nodes")
+    if !testing.expect_value(t, len(nodes), 3) do return
+    group := nodes[0].(json.Object)
+    testing.expect_value(t, board.selected, 1)
+    testing.expect_value(t, canvas_string(group, "type"), "group")
+    testing.expect_value(t, canvas_parent(&board, 2), 1)
+    testing.expect_value(t, canvas_parent(&board, 3), 1)
+    testing.expect_value(t, canvas_string(group, "label"), "Group")
+
+    canvas_keyboard_key(&board, &ed, .I, {}, size)
+    testing.expect_value(t, ed.mode, Editor_Mode.INSERT)
+    editor_begin_frame(&ed)
+    editor_handle_charpress(&ed, '!')
+    editor_end_frame(&ed)
+    canvas_finish_editing(&board, &ed)
+    testing.expect_value(t, canvas_string(group, "label"), "Group!")
+    if !testing.expect(t, canvas_save(&board, path)) do return
+
+    loaded: Canvas
+    canvas_init(&loaded)
+    defer canvas_destroy(&loaded)
+    if !testing.expect(t, canvas_open(&loaded, path)) do return
+    testing.expect_value(t, canvas_string(canvas_items(&loaded, "nodes")[0].(json.Object), "label"), "Group!")
+    testing.expect_value(t, canvas_parent(&loaded, 2), 1)
+    testing.expect_value(t, canvas_parent(&loaded, 3), 1)
+    testing.expect_value(t, len(canvas_items(&loaded, "edges")), 1)
+}
+
+@(test)
+test_canvas_nested_group_move_and_unwrap :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    size := [2]f32{1000, 720}
+    board.selected = canvas_add_card(&board, 280, 280)
+    child := canvas_items(&board, "nodes")[0].(json.Object)
+    child_id := strings.clone(canvas_string(child, "id"), context.temp_allocator)
+    inner_index := canvas_create_group(&board, size)
+    inner := canvas_items(&board, "nodes")[inner_index - 1].(json.Object)
+    inner_id := strings.clone(canvas_string(inner, "id"), context.temp_allocator)
+    outer_index := canvas_create_group(&board, size)
+    testing.expect_value(t, canvas_parent(&board, board.node_indices[inner_id]), outer_index)
+    testing.expect_value(t, canvas_parent(&board, board.node_indices[child_id]), board.node_indices[inner_id])
+
+    board.selected = board.node_indices[child_id]
+    canvas_keyboard_key(&board, &ed, .G, {}, size)
+    canvas_keyboard_key(&board, &ed, .P, {}, size)
+    testing.expect_value(t, board.selected, board.node_indices[inner_id])
+    canvas_keyboard_key(&board, &ed, .G, {}, size)
+    canvas_keyboard_key(&board, &ed, .P, {}, size)
+    testing.expect_value(t, board.selected, outer_index)
+    before := canvas_node_rect(child)
+    step := f32(canvas_grid_step(board.zoom))
+    after := before
+    after.x += step
+    canvas_keyboard_key(&board, &ed, .M, {}, size)
+    canvas_keyboard_key(&board, &ed, .L, {}, size)
+    testing.expect_value(t, canvas_node_rect(child), before)
+    testing.expect_value(t, canvas_positioned_node(&board, child), after)
+    canvas_keyboard_key(&board, &ed, .ENTER, {}, size)
+    testing.expect_value(t, canvas_node_rect(child), after)
+    canvas_step_history(&board, false)
+    testing.expect_value(t, canvas_node_rect(child), before)
+    canvas_step_history(&board, true)
+    testing.expect_value(t, canvas_node_rect(child), after)
+
+    board.selected = outer_index
+    canvas_keyboard_key(&board, &ed, .D, {}, size)
+    testing.expect_value(t, len(canvas_items(&board, "nodes")), 2)
+    testing.expect_value(t, canvas_parent(&board, board.node_indices[inner_id]), 0)
+    testing.expect_value(t, canvas_parent(&board, board.node_indices[child_id]), board.node_indices[inner_id])
+}
+
+@(test)
+test_canvas_marquee_and_drop_reparent :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    size := [2]f32{1000, 720}
+    board.zoom = 1
+    card := canvas_add_card(&board, 784, 224)
+    canvas_select_marquee(&board, {42, 84, 600, 360})
+    canvas_keyboard_key(&board, &ed, .ENTER, {}, size)
+    group := board.selected
+    testing.expect(t, group != card)
+
+    canvas_finish_move(&board, {card, false, {140, 224}})
+    testing.expect_value(t, canvas_parent(&board, card), group)
+    minimum := canvas_resize_minimum(&board, group)
+    testing.expect(t, minimum.x > CANVAS_MIN_CARD_W && minimum.y > CANVAS_MIN_CARD_H)
+    canvas_finish_move(&board, {card, false, {784, 224}})
+    testing.expect_value(t, canvas_parent(&board, card), 0)
+    canvas_step_history(&board, false)
+    testing.expect_value(t, canvas_parent(&board, card), group)
+    canvas_step_history(&board, true)
+    testing.expect_value(t, canvas_parent(&board, card), 0)
+    canvas_step_history(&board, false)
+    outer := canvas_items(&board, "nodes")[group - 1].(json.Object)
+    before := canvas_node_rect(outer)
+    canvas_finish_resize(&board, {card, true, {700, 140}})
+    testing.expect(t, canvas_node_rect(outer).width > before.width)
+    canvas_step_history(&board, false)
+    outer = canvas_items(&board, "nodes")[group - 1].(json.Object)
+    testing.expect_value(t, canvas_node_rect(outer), before)
+    testing.expect_value(t, canvas_parent(&board, card), group)
+}
+
+@(test)
+test_canvas_imports_nested_standard_groups :: proc(t: ^testing.T) {
+    input :: `{"nodes": [
+        {"id":"outer","type":"group","x":0,"y":0,"width":600,"height":600,"label":"Project"},
+        {"id":"inner","type":"group","x":80,"y":80,"width":300,"height":300,"label":"Draft"},
+        {"id":"card","type":"text","x":120,"y":140,"width":180,"height":100,"text":"Draft"},
+        {"id":"root","type":"text","x":120,"y":140,"width":180,"height":100,"text":"Root","opalParent":""}
+    ],"edges":[]}`
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    doc, ok := canvas_parse(transmute([]byte)string(input))
+    if !testing.expect(t, ok) do return
+    json.destroy_value(board.current.document)
+    board.current.document = doc
+    canvas_reindex(&board)
+    canvas_import_groups(&board)
+    testing.expect_value(t, canvas_parent(&board, 1), 0)
+    testing.expect_value(t, canvas_parent(&board, 2), 1)
+    testing.expect_value(t, canvas_parent(&board, 3), 2)
+    testing.expect_value(t, canvas_parent(&board, 4), 0)
+}
 
 @(test)
 test_canvas_commands_work_without_a_selection :: proc(t: ^testing.T) {
@@ -209,17 +496,21 @@ test_canvas_move_resize_and_zoom_do_not_allocate :: proc(t: ^testing.T) {
     canvas_init(&board)
     defer canvas_destroy(&board)
     node := canvas_add_card(&board, 10, 20)
+    card := canvas_items(&board, "nodes")[0].(json.Object)
 
     allocations := tracking.total_allocation_count
     for i in 1..=128 {
-        canvas_drag_geometry(&board, {node, false, {json.Integer(10 + i), 20}})
+        board.drag_geometry = Canvas_Geometry{node, false, {json.Integer(10 + i), 20}}
+        testing.expect_value(t, canvas_positioned_node(&board, card).x, f32(10 + i))
         canvas_zoom_at(&board, {200, 150}, -1 if i % 2 == 0 else 1)
     }
-    board.drag_recorded = false
-    canvas_drag_geometry(&board, {node, true, {320, 150}})
-    canvas_drag_geometry(&board, {node, true, {325, 155}})
+    canvas_finish_move(&board, board.drag_geometry.?)
+    board.drag_geometry = Canvas_Geometry{node, true, {320, 150}}
+    testing.expect_value(t, canvas_positioned_node(&board, card).width, f32(320))
+    board.drag_geometry = Canvas_Geometry{node, true, {325, 155}}
+    canvas_finish_resize(&board, board.drag_geometry.?)
+    board.drag_geometry = nil
     testing.expect_value(t, tracking.total_allocation_count - allocations, i64(0))
-    card := canvas_items(&board, "nodes")[0].(json.Object)
     testing.expect_value(t, len(board.undo), 3)
     testing.expect_value(t, canvas_coord(card, "x"), f32(138))
     testing.expect_value(t, canvas_coord(card, "width"), f32(325))
@@ -501,7 +792,7 @@ test_canvas_mouse_can_choose_far_side_of_a_card :: proc(t: ^testing.T) {
     dest, right := canvas_connection_target(&board, nodes, canvas_anchor(b, .RIGHT) + [2]f32{3, 0})
     testing.expect_value(t, dest, target)
     testing.expect_value(t, right, Canvas_Side.RIGHT)
-    path := canvas_route_edge(a, b, .RIGHT, right, board.zoom)
+    path := canvas_route_edge(a, b, .RIGHT, right)
     testing.expect_value(t, path.points[path.count - 1], canvas_anchor(b, .RIGHT))
     testing.expect(t, path.points[path.count - 2].x > b.x + b.width)
     for i in 0..<path.count - 1 {
@@ -509,6 +800,32 @@ test_canvas_mouse_can_choose_far_side_of_a_card :: proc(t: ^testing.T) {
         testing.expect(t, !canvas_edge_segment_overlaps(path.points[i], path.points[i + 1], b))
     }
     testing.expect(t, canvas_hit_path(path, canvas_path_midpoint(path)))
+}
+
+@(test)
+test_canvas_wraparound_edge_stays_on_same_side_through_zoom_and_pan :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    from := canvas_add_card(&board, 415, 171)
+    to := canvas_add_card(&board, -31, 171)
+    canvas_connect(&board, from, to, .RIGHT, .LEFT)
+    nodes := canvas_items(&board, "nodes")
+    edge := canvas_items(&board, "edges")[0].(json.Object)
+    reference, ok := canvas_edge_path(&board, nodes, edge)
+    if !testing.expect(t, ok && reference.count == 6) do return
+    testing.expect(t, canvas_path_midpoint(reference).y < 171)
+
+    for zoom, i in ([?]f32{0.12, 0.29, 0.58, 0.8, 1.37, 3}) {
+        board.zoom, board.pan = zoom, {353.25 * f32(i), -204.75 * f32(i)}
+        path, routed := canvas_edge_path(&board, nodes, edge)
+        if !testing.expect(t, routed && path.count == reference.count) do return
+        testing.expect(t, canvas_path_midpoint(path).y < 171 * zoom + board.pan.y)
+        for point, index in path.points[:path.count] {
+            expected := reference.points[index] * zoom + board.pan
+            testing.expect(t, canvas_distance_squared(point, expected) < 0.001)
+        }
+    }
 }
 
 @(test)
@@ -602,6 +919,13 @@ test_canvas_keyboard_resize_previews_and_undoes :: proc(t: ^testing.T) {
     testing.expect_value(t, len(board.undo), undo_count + 1)
     canvas_keyboard_key(&board, &ed, .U, {}, screen)
     testing.expect_value(t, canvas_node_rect(node), rl.Rectangle{150, 150, CANVAS_CARD_W, CANVAS_CARD_H})
+}
+
+@(test)
+test_canvas_mouse_move_snaps_off_grid_card_to_visible_grid :: proc(t: ^testing.T) {
+    rect := rl.Rectangle{-17, 31, 252, 140}
+    testing.expect_value(t, canvas_drag_move_position(rect, {-13, 10}, 1), [2]json.Integer{-28, 28})
+    testing.expect_value(t, canvas_drag_move_position(rect, {-13, 10}, 0.5), [2]json.Integer{-56, 56})
 }
 
 @(test)

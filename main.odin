@@ -189,7 +189,7 @@ main :: proc() {
                 }
             }
             if canvas_consumed {
-                if canvas_mode && !canvas_editor_active(&board) && board.prompt == .NONE && board.drag == .NONE &&
+                if canvas_mode && !canvas_editor_active(&board) && board.prompt == .NONE && !board.color_picker_open && board.drag == .NONE &&
                    board.key_mode != .G_PREFIX && repeat_mods - {.SHIFT} == {} &&
                    !(board.key_mode == .CONNECT && .SHIFT in repeat_mods) &&
                    canvas_key_direction(key, board.key_mode, repeat_mods) != {} {
@@ -219,7 +219,12 @@ main :: proc() {
             rl.SetMouseCursor(next_cursor)
             cursor = next_cursor
         }
-        has_input := has_key_input || len(chars) > 0 || repeats > 0 || mouse_selection ||
+        theme_changed := ed.theme_request != nil
+        if choice, pending := ed.theme_request.?; pending {
+            theme_apply_choice(theme.data, choice)
+            ed.theme_request = nil
+        }
+        has_input := has_key_input || len(chars) > 0 || repeats > 0 || mouse_selection || theme_changed ||
                      canvas_changed || finished_editing || closing
         wake_needs_redraw := redraw_after_wait && len(keys) == 0
         if !has_input && !wake_needs_redraw && frame_size == drawn_size && !rl.IsWindowResized() {
@@ -395,7 +400,9 @@ draw_editor_frame :: proc(
     rl.ClearBackground(theme.data.bg_color)
     if board != nil && !board.expanded {
         canvas_draw_board(board, ed, theme, width, height, trace)
-        canvas_draw_toolbar(board, ed, theme, width, height)
+        canvas_draw_toolbar(board, ed, theme, width)
+        if board.color_picker_open do canvas_draw_color_picker(board, theme, width, height)
+        canvas_draw_status(board, ed, theme, width, height)
         return
     }
     bar := f32(CANVAS_BAR) if board != nil else 0
@@ -407,7 +414,10 @@ draw_editor_frame :: proc(
     bottom := max(top, content_h - PAGE_MARGIN_BOTTOM)
 
     editor_display_begin(ed, theme, {margin_side, top, page_w, bottom - top})
-    editor_display_draw(ed, theme, width, height, trace)
+    editor_display_draw(ed, theme, width, height, trace, show_status = board == nil)
     editor_display_end(ed)
-    if board != nil do canvas_draw_toolbar(board, ed, theme, width, height)
+    if board != nil {
+        canvas_draw_toolbar(board, ed, theme, width)
+        canvas_draw_status(board, ed, theme, width, height)
+    }
 }

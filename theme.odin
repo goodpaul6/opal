@@ -64,6 +64,7 @@ Theme_Data :: struct {
     fg_color: rl.Color,
     heading_color, muted_color, accent_color: rl.Color,
     code_color, code_background: rl.Color,
+    light: bool,
     line_spacing: f32,
 
     // Only the bundled faces opt in to scaling pair adjustments across sizes.
@@ -119,6 +120,32 @@ canvas_font_raster :: proc(theme: ^Theme, rasters: ^Canvas_Font_Rasters, variant
     return cached
 }
 
+Theme_Choice :: enum { TOGGLE, DARK, LIGHT }
+
+LOTUS_SELECTION :: rl.Color{0xC9, 0xCB, 0xD1, 0xFF}
+LOTUS_FOCUS :: rl.Color{0x43, 0x43, 0x6C, 0xFF}
+
+theme_apply_choice :: proc(data: ^Theme_Data, choice: Theme_Choice) {
+    data.light = !data.light if choice == .TOGGLE else choice == .LIGHT
+    if data.light {
+        data.bg_color = {0xF2, 0xEC, 0xBC, 0xFF}
+        data.fg_color = {0x54, 0x54, 0x64, 0xFF}
+        data.heading_color = LOTUS_FOCUS
+        data.muted_color = {0x71, 0x6E, 0x61, 0xFF}
+        data.accent_color = {0x83, 0x6F, 0x4A, 0xFF}
+        data.code_color = LOTUS_FOCUS
+        data.code_background = {0xE5, 0xDD, 0xB0, 0xFF}
+    } else {
+        data.bg_color = {0x16, 0x16, 0x1D, 0xFF}
+        data.fg_color = {0xDC, 0xD7, 0xBA, 0xFF}
+        data.heading_color = {0xF3, 0xEB, 0xD5, 0xFF}
+        data.muted_color = {0x9B, 0x96, 0x8A, 0xFF}
+        data.accent_color = {0xC1, 0xAE, 0x8C, 0xFF}
+        data.code_color = {0xDE, 0xC4, 0x9C, 0xFF}
+        data.code_background = {0x23, 0x23, 0x29, 0xFF}
+    }
+}
+
 theme_data_make_default :: proc() -> Theme_Data {
     INTER_DATA := #load("fonts/Inter-Regular.ttf")
     COMMIT_MONO_DATA := #load("fonts/CommitMono-400-Regular.otf")
@@ -138,15 +165,9 @@ theme_data_make_default :: proc() -> Theme_Data {
         }),
         font_data = font_data,
 
-        bg_color = {0x16, 0x16, 0x1D, 0xFF},
-        fg_color = {0xDC, 0xD7, 0xBA, 0xFF},
-        heading_color = {0xF3, 0xEB, 0xD5, 0xFF},
-        muted_color = {0x9B, 0x96, 0x8A, 0xFF},
-        accent_color = {0xC1, 0xAE, 0x8C, 0xFF},
-        code_color = {0xDE, 0xC4, 0x9C, 0xFF},
-        code_background = {0x23, 0x23, 0x29, 0xFF},
         line_spacing = 1.35,
     }
+    theme_apply_choice(&data, .DARK)
     when ODIN_OS == .Darwin {
         data.reuse_font_pairs = true
         data.font_pair_cache[.H1] = bundled_inter_font_pairs(INTER_DATA[:])

@@ -2,6 +2,7 @@ package main
 
 import "core:strings"
 import "core:time"
+import "core:unicode/utf8"
 import rl "vendor:raylib"
 
 INSERT_CARET_W :: 2
@@ -21,23 +22,45 @@ STATUS_PAD_Y :: 6
 
 Editor_Status_Layout :: struct {
     label, command_tail: string,
-    badge_width, prompt_x, command_x, caret_x: f32,
+    badge_width, prompt_x, command_x, caret_x, end_x, message_x: f32,
 }
 
-// Read mode and command at draw time; the visible text borrows the editor buffer.
-editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^Font_Metrics = nil) -> (layout: Editor_Status_Layout) {
-    switch ed.mode {
-        case .NORMAL: layout.label = "NORMAL"
-        case .INSERT: layout.label = "INSERT"
-        case .COMMAND: layout.label = "COMMAND"
-        case .VISUAL: layout.label = "VISUAL" if ed.visual_characterwise else "VISUAL LINE"
-    }
-    layout.badge_width = display_text_width(font, layout.label, metrics) + 2 * STATUS_PAD_X
-    if ed.mode != .COMMAND do return
+Status_Line :: struct {
+    label, command, message: string,
+    cursor: int,
+    input, colon, selected, muted: bool,
+}
 
-    colon_width := display_glyph_advance(font, ':', metrics)
+editor_status_line :: proc(ed: ^Editor) -> (line: Status_Line) {
+    switch ed.mode {
+        case .NORMAL: line.label, line.muted = "NORMAL", true
+        case .INSERT: line.label = "INSERT"
+        case .COMMAND:
+            line.label = "COMMAND"
+            line.input, line.colon = true, true
+            line.command, line.cursor = strings.to_string(ed.command), ed.command_cursor
+        case .VISUAL: line.label = "VISUAL" if ed.visual_characterwise else "VISUAL LINE"
+    }
+    return
+}
+
+editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^Font_Metrics = nil) -> Editor_Status_Layout {
+    return status_line_layout(editor_status_line(ed), font, width, metrics)
+}
+
+status_line_layout :: proc(line: Status_Line, font: ^rl.Font, width: f32, metrics: ^Font_Metrics) -> (layout: Editor_Status_Layout) {
+    layout.label = line.label
+    layout.badge_width = display_text_width(font, layout.label, metrics) + 2 * STATUS_PAD_X
+    layout.message_x = layout.badge_width + STATUS_PAD_X
+    if !line.input do return
+
+    prefix: rune = ':' if line.colon else 0
+    colon_width := display_glyph_advance(font, prefix, metrics) if line.colon else 0
     layout.prompt_x = layout.badge_width + STATUS_PAD_X
     right := width - STATUS_PAD_X
+    if line.message != "" && width >= 240 {
+        right -= min(width * 0.45, display_text_width(font, line.message, metrics) + STATUS_PAD_X)
+    }
     if layout.prompt_x + colon_width + INSERT_CARET_W > right {
         // In tiny windows prefer showing the prompt and caret to the badge.
         layout.badge_width = 0
@@ -46,63 +69,77 @@ editor_status_layout :: proc(ed: ^Editor, font: ^rl.Font, width: f32, metrics: ^
     }
     layout.command_x = layout.prompt_x + colon_width
 
-    // Command input is ASCII. Keep the caret visible and measure only as
-    // much text on either side of it as fits.
-    command := strings.to_string(ed.command)
-    cursor := ed.command_cursor
+    // Keep the caret visible and measure only as much text as fits.
+    command := line.command
+    cursor := line.cursor
     start := cursor
+    next: rune
     tail_width: f32
     available := right - layout.command_x - INSERT_CARET_W
     for start > 0 {
-        ch := rune(command[start - 1])
+        ch, size := utf8.decode_last_rune(command[:start])
         advance := display_glyph_advance(font, ch, metrics)
-        if start < cursor do advance += font_pair_delta(metrics, ch, rune(command[start]))
+        if start < cursor do advance += font_pair_delta(metrics, ch, next)
         // The prompt stays visible, so it pairs with the first visible byte,
         // not with any of the hidden prefix.
-        first_delta := font_pair_delta(metrics, ':', ch)
+        first_delta := font_pair_delta(metrics, prefix, ch)
         if tail_width + advance + first_delta > available do break
         tail_width += advance
-        start -= 1
+        start -= size
+        next = ch
     }
     // Use the same forward pen as drawing, including the prompt pair.
-    pen := Display_Pen{layout.command_x, ':'}
+    pen := Display_Pen{layout.command_x, prefix}
     for ch in command[start:cursor] do display_pen_step(&pen, font, metrics, ch)
     layout.caret_x = pen.x
+    layout.end_x = pen.x
     end := cursor
     for end < len(command) {
-        display_pen_step(&pen, font, metrics, rune(command[end]))
+        ch, size := utf8.decode_rune(command[end:])
+        display_pen_step(&pen, font, metrics, ch)
         if pen.x > right do break
-        end += 1
+        end += size
+        layout.end_x = pen.x
     }
     layout.command_tail = command[start:end]
+    layout.message_x = max(layout.end_x, layout.caret_x + INSERT_CARET_W) + STATUS_PAD_X
     return
 }
 
 editor_status_draw :: proc(ed: ^Editor, theme: ^Theme, width, height: i32) {
+    status_line_draw(editor_status_line(ed), theme, width, height)
+}
+
+status_line_draw :: proc(line: Status_Line, theme: ^Theme, width, height: i32) {
     font := &theme.fonts[.BODY]
     bar_h := min(f32(height), editor_status_line_height(theme))
     if width <= 0 || bar_h <= 0 do return
     bar := rl.Rectangle{0, f32(height) - bar_h, f32(width), bar_h}
     text_y := bar.y + max(0, (bar_h - f32(font.baseSize)) / 2)
     fg, bg := theme.data.fg_color, theme.data.bg_color
-    layout := editor_status_layout(ed, font, bar.width, &theme.font_metrics[.BODY])
+    layout := status_line_layout(line, font, bar.width, &theme.font_metrics[.BODY])
 
     display_begin_scissor(theme, bar, height)
     defer rl.EndScissorMode()
     rl.DrawRectangleRec(display_snap_rect(theme, bar), rl.ColorLerp(bg, fg, 0.04))
     if layout.badge_width > 0 {
-        mode_color := theme.data.muted_color if ed.mode == .NORMAL else theme.data.accent_color
+        mode_color := theme.data.muted_color if line.muted else theme.data.accent_color
         rl.DrawRectangleRec(display_snap_rect(theme, {0, bar.y, layout.badge_width, bar_h}), rl.ColorLerp(bg, mode_color, 0.12))
         display_draw_text(theme, font, layout.label, {STATUS_PAD_X, text_y}, mode_color)
     }
-    if ed.mode == .COMMAND {
-        display_draw_text(theme, font, ":", {layout.prompt_x, text_y}, fg)
-        display_draw_text(theme, font, layout.command_tail, {layout.command_x, text_y}, fg, ':')
-        rl.DrawRectangleRec(
+    if line.input {
+        if line.colon do display_draw_text(theme, font, ":", {layout.prompt_x, text_y}, fg)
+        if line.selected {
+            rl.DrawRectangleRec(display_snap_rect(theme, {layout.command_x, text_y, layout.end_x - layout.command_x, f32(font.baseSize)}),
+                                display_selection_color(theme))
+        }
+        display_draw_text(theme, font, layout.command_tail, {layout.command_x, text_y}, fg, ':' if line.colon else 0)
+        if !line.selected do rl.DrawRectangleRec(
             display_snap_rect(theme, {layout.caret_x, text_y, INSERT_CARET_W, f32(font.baseSize)}),
             theme.data.accent_color,
         )
     }
+    if line.message != "" do display_draw_text(theme, font, line.message, {layout.message_x, text_y}, fg)
 }
 
 // Sets up display state that will use used throughout display calls

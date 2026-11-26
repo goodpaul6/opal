@@ -45,7 +45,12 @@ canvas_reveal_rect :: proc(board: ^Canvas, rect: rl.Rectangle, size: [2]f32) {
 
 canvas_reveal_node :: proc(board: ^Canvas, index: int, size: [2]f32) {
     card := canvas_items(board, "nodes")[index - 1].(json.Object)
-    canvas_reveal_rect(board, canvas_rect(board, card), size)
+    rect := canvas_rect(board, card)
+    if canvas_is_group(card) {
+        rect = display_view_rect(canvas_group_header(board, card), board.pan, board.zoom)
+        rect.width = min(rect.width, CANVAS_CARD_W * board.zoom)
+    }
+    canvas_reveal_rect(board, rect, size)
 }
 
 canvas_direction_score :: proc(delta: [2]f32, direction: [2]i32) -> f32 {
@@ -103,7 +108,7 @@ canvas_select_in_direction :: proc(board: ^Canvas, direction: [2]i32, size: [2]f
     heading: [2]i32
     if board.selected != 0 {
         node := nodes[board.selected - 1].(json.Object)
-        from, heading = canvas_center(canvas_rect(board, node)), direction
+        from, heading = canvas_node_focus(board, node), direction
     } else if board.selected_edge != 0 {
         edge := edges[board.selected_edge - 1].(json.Object)
         path, ok := canvas_edge_path(board, nodes, edge)
@@ -114,7 +119,7 @@ canvas_select_in_direction :: proc(board: ^Canvas, direction: [2]i32, size: [2]f
     distance := max(f32)
     for item, i in nodes {
         if board.selected == i + 1 do continue
-        delta := canvas_center(canvas_rect(board, item.(json.Object))) - from
+        delta := canvas_node_focus(board, item.(json.Object)) - from
         d := canvas_direction_score(delta, heading)
         if d < distance {
             next_node, distance = i + 1, d
@@ -151,7 +156,8 @@ canvas_adjacent_card :: proc(board: ^Canvas, from: int, side: Canvas_Side) -> [2
     // Advance past an occupied slot while keeping the card in the same lane.
     for {
         blocked := false
-        for item in nodes {
+        for item, i in nodes {
+            if canvas_has_ancestor(board, from, i + 1) do continue
             other := canvas_node_rect(item.(json.Object))
             if !rl.CheckCollisionRecs(card, other) do continue
             blocked = true
@@ -202,11 +208,19 @@ canvas_open_adjacent :: proc(board: ^Canvas, ed: ^Editor, side: Canvas_Side, siz
     if from == 0 {
         board.selected = canvas_insert_first_card(board, size)
     } else {
-        point := canvas_adjacent_card(board, from, side)
+        source := canvas_items(board, "nodes")[from - 1].(json.Object)
+        parent := canvas_parent(board, from)
+        point: [2]f32
+        if canvas_is_group(source) {
+            parent = from
+            point = canvas_space_in_group(board, parent)
+        } else {
+            point = canvas_adjacent_card(board, from, side)
+        }
         source_side := board.connect_source_side.? or_else side
         opposite := Canvas_Side((int(side) + 2) % 4)
         target_side := board.connect_target_side.? or_else opposite
-        board.selected = canvas_add_card(board, i64(math.round(point.x)), i64(math.round(point.y)), connect, source_side, target_side)
+        board.selected = canvas_add_card(board, i64(math.round(point.x)), i64(math.round(point.y)), connect, source_side, target_side, parent)
         canvas_reveal_node(board, board.selected, size)
     }
     board.selected_edge = 0
@@ -216,16 +230,19 @@ canvas_open_adjacent :: proc(board: ^Canvas, ed: ^Editor, side: Canvas_Side, siz
 
 canvas_key_edge_anchors :: proc(board: ^Canvas) -> (a, b: rl.Rectangle, from_side, to_side: Canvas_Side) {
     nodes := canvas_items(board, "nodes")
-    a = canvas_rect(board, nodes[board.connect_from - 1].(json.Object))
-    b = canvas_rect(board, nodes[board.selected - 1].(json.Object))
+    a = canvas_render_node_rect(board, nodes[board.connect_from - 1].(json.Object))
+    b = canvas_render_node_rect(board, nodes[board.selected - 1].(json.Object))
     from_side = board.connect_source_side.? or_else canvas_edge_side(nil, "", a, canvas_center(b))
     to_side = board.connect_target_side.? or_else canvas_edge_side(nil, "", b, canvas_anchor(a, from_side))
     return
 }
 
 canvas_finish_key_move :: proc(board: ^Canvas) {
-    previous, changed := canvas_apply_geometry(board, board.key_move)
-    if changed do canvas_record_undo(board, previous)
+    if board.key_move.resize {
+        canvas_finish_resize(board, board.key_move)
+    } else {
+        canvas_finish_move(board, board.key_move)
+    }
     board.key_mode = .NORMAL
 }
 
@@ -243,6 +260,7 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
     if editor_is_modifier_key(key) do return false
     if key == .ESCAPE {
         if board.key_mode == .NORMAL do board.selected, board.selected_edge = 0, 0
+        canvas_clear_visual(board)
         if board.key_mode == .CONNECT {
             board.selected = board.connect_from
             canvas_reveal_node(board, board.selected, size)
@@ -252,6 +270,18 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
     }
     if board.key_mode == .G_PREFIX {
         board.key_mode = .NORMAL
+        if key == .B && mods == {} {
+            index := canvas_create_group(board, size)
+            canvas_reveal_node(board, index, size)
+            return true
+        }
+        if key == .P && mods == {} {
+            if parent := canvas_parent(board, board.selected); parent != 0 {
+                board.selected, board.selected_edge = parent, 0
+                canvas_reveal_node(board, parent, size)
+            }
+            return true
+        }
         if key == .C && mods == {} {
             if board.selected == 0 do canvas_select_in_direction(board, {}, size)
             if board.selected != 0 {
@@ -299,7 +329,6 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
             if board.key_mode == .RESIZE {
                 card := canvas_items(board, "nodes")[board.key_move.node - 1].(json.Object)
                 origin := [2]json.Integer{card["x"].(json.Integer), card["y"].(json.Integer)}
-                minimum := [2]json.Integer{CANVAS_MIN_CARD_W, CANVAS_MIN_CARD_H}
                 for axis in 0..<2 {
                     if direction[axis] == 0 do continue
                     extent := max(1, values[axis])
@@ -308,7 +337,7 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
                     delta := canvas_next_grid_line(edge, step, direction[axis]) - edge
                     if delta > 0 && extent > max(i64) - delta do continue
                     next := extent + delta
-                    if next >= min(minimum[axis], extent) do values[axis] = next
+                    if next >= min(board.resize_minimum[axis], extent) do values[axis] = next
                 }
             } else {
                 for axis in 0..<2 {
@@ -318,13 +347,31 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
             board.key_move.values = values
             canvas_reveal_node(board, board.selected, size)
         } else {
-            canvas_select_in_direction(board, direction, size, include_edges = board.key_mode == .NORMAL)
+            if board.visual do board.message = ""
+            canvas_select_in_direction(board, direction, size, include_edges = board.key_mode == .NORMAL && !board.visual)
+            if board.visual do canvas_extend_visual(board)
         }
         return true
     }
 
     if board.key_mode == .MOVE || board.key_mode == .RESIZE {
         if key == .ENTER do canvas_finish_key_move(board)
+        return true
+    }
+    if key == .SEMICOLON && mods == {.SHIFT} && board.key_mode == .NORMAL {
+        board.message = ""
+        canvas_begin_prompt(board, .COMMAND)
+        return true
+    }
+    if board.visual {
+        if mods != {} do return false
+        #partial switch key {
+            case .V: canvas_clear_visual(board)
+            case .ENTER:
+                index := canvas_create_group(board, size)
+                canvas_reveal_node(board, index, size)
+            case: return false
+        }
         return true
     }
     if key == .O || (key == .A && mods == {}) {
@@ -361,14 +408,15 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
         canvas_frame_board(board, size)
         return true
     }
-    if key == .SEMICOLON && mods == {.SHIFT} {
-        board.message = ""
-        canvas_begin_prompt(board, .COMMAND)
-        return true
-    }
     if mods != {} do return false
 
     #partial switch key {
+        case .V:
+            if board.selected == 0 do canvas_select_in_direction(board, {}, size)
+            board.message = ""
+            board.visual = true
+            board.visual_anchor = board.selected
+            canvas_extend_visual(board)
         case .I, .ENTER:
             if board.selected != 0 do canvas_edit_card(board, ed, board.selected, insert = key == .I)
             else if board.selected_edge != 0 {
@@ -381,6 +429,7 @@ canvas_keyboard_key :: proc(board: ^Canvas, ed: ^Editor, key: rl.KeyboardKey, mo
             if board.selected != 0 {
                 card := canvas_items(board, "nodes")[board.selected - 1].(json.Object)
                 resizing := key == .R
+                if resizing do board.resize_minimum = canvas_resize_minimum(board, board.selected)
                 x, y := canvas_geometry_keys(resizing)
                 board.key_move = {board.selected, resizing, {card[x].(json.Integer), card[y].(json.Integer)}}
                 board.key_mode = .RESIZE if resizing else .MOVE

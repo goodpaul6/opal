@@ -46,7 +46,7 @@ canvas_inline_editor_outer_bounds :: proc(board: ^Canvas, ed: ^Editor, theme: ^T
 
 canvas_inline_editor_begin :: proc(board: ^Canvas, ed: ^Editor, theme: ^Theme, screen: [2]f32) {
     if board.editing_edge == 0 {
-        editor_display_begin(ed, theme, canvas_card_content(canvas_active_card(board)), board.zoom, board.pan)
+        editor_display_begin(ed, theme, canvas_card_content(canvas_active_card(board), board), board.zoom, board.pan)
         return
     }
     bounds := canvas_label_editor_rect(board, ed, theme, screen)

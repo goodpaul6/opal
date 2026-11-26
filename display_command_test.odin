@@ -1,5 +1,6 @@
 package main
 
+import "core:encoding/json"
 import "core:mem"
 import "core:strings"
 import "core:testing"
@@ -56,6 +57,62 @@ test_display_markdown_preview_uses_headings_without_caret :: proc(t: ^testing.T)
     command := commands[len(commands) - 1].sub.(Display_Command_Text)
     testing.expect_value(t, command.text, "Idea")
     testing.expect(t, command.font == &theme.fonts[.H1])
+}
+
+@(test)
+test_canvas_group_markdown_header_fits_and_follows_geometry :: proc(t: ^testing.T) {
+    data := Theme_Data{line_spacing = 1.4}
+    theme := make_display_test_theme(&data)
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    screen := [2]f32{900, 600}
+    board.pan = {70, 95}
+    board.zoom = 1.5
+    board.selected = canvas_add_card(&board, 280, 280)
+    child := canvas_items(&board, "nodes")[0].(json.Object)
+    index := canvas_create_group(&board, screen)
+    group := canvas_items(&board, "nodes")[index - 1].(json.Object)
+    title :: "# Heading\n\nA long second line that wraps at the edge of a narrow group"
+    canvas_set(&group, "label", strings.clone(title))
+    original := canvas_node_rect(child)
+    canvas_layout_group_titles(&board, &ed, &theme, screen)
+    header := canvas_group_header(&board, group)
+    testing.expect(t, header.height > 2 * CANVAS_GROUP_HEADER)
+    testing.expect(t, header.y + header.height < original.y)
+    testing.expect_value(t, canvas_node_rect(child), original)
+    content := canvas_card_content(group, &board)
+    testing.expect_value(t, content.height, header.height - 18)
+
+    board.drag_geometry = Canvas_Geometry{index, false, {json.Integer(canvas_coord(group, "x")) + 28, json.Integer(canvas_coord(group, "y")) + 56}}
+    canvas_layout_group_titles(&board, &ed, &theme, screen)
+    moved := canvas_card_content(group, &board)
+    testing.expect_value(t, moved, rl.Rectangle{content.x + 28, content.y + 56, content.width, content.height})
+    hit := [2]f32{moved.x + 1, moved.y + 1} * board.zoom + board.pan
+    testing.expect_value(t, canvas_hit_card(&board, canvas_items(&board, "nodes"), hit), index)
+    canvas_finish_move(&board, board.drag_geometry.?)
+    board.drag_geometry = nil
+    testing.expect_value(t, canvas_card_content(group, &board), moved)
+
+    canvas_keyboard_key(&board, &ed, .M, {}, screen)
+    canvas_keyboard_key(&board, &ed, .L, {}, screen)
+    keyboard := canvas_card_content(group, &board)
+    testing.expect(t, keyboard.x > moved.x)
+    testing.expect_value(t, keyboard.y, moved.y)
+    canvas_keyboard_key(&board, &ed, .ESCAPE, {}, screen)
+    testing.expect_value(t, canvas_card_content(group, &board), moved)
+
+    canvas_edit_card(&board, &ed, index, true)
+    defer canvas_finish_editing(&board, &ed)
+    editor_begin_frame(&ed)
+    editor_handle_keypress(&ed, .ENTER, {})
+    editor_end_frame(&ed)
+    canvas_layout_group_titles(&board, &ed, &theme, screen)
+    canvas_inline_editor_begin(&board, &ed, &theme, screen)
+    editing := canvas_card_content(group, &board)
+    testing.expect(t, editing.height > moved.height)
+    testing.expect_value(t, ed.display.bounds, display_view_rect(editing, board.pan, board.zoom))
 }
 
 @(test)

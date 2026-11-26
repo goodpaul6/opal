@@ -283,6 +283,7 @@ display_hit_chunk :: proc(
 }
 
 display_selection_color :: proc(theme: ^Theme) -> rl.Color {
+    if theme.data.light do return LOTUS_SELECTION
     accent := theme.data.accent_color if theme.data.accent_color.a != 0 else theme.data.fg_color
     return rl.ColorLerp(theme.data.bg_color, accent, 0.25)
 }
@@ -375,6 +376,7 @@ display_command_gen :: proc(
     hit: ^Display_Hit_Test = nil,
     preview: ^string = nil,
     rasters: ^Canvas_Font_Rasters = nil,
+    layout_height: ^f32 = nil,
 ) -> (caret_rect: rl.Rectangle) {
     // TODO(Apaar): Handle horizontal scroll
     src: string
@@ -658,6 +660,7 @@ display_command_gen :: proc(
         }
     }
 
+    if layout_height != nil do layout_height^ = draw_pos.y + line_height
     selected_empty_line := visual && !characterwise && row_line_start == len(src) && selected_lines[1] == len(src)
     if (sel_pos == len(src) || selected_empty_line) && (stop_y < 0 || draw_pos.y < stop_y) {
         eof_line := p.line

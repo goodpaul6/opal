@@ -23,16 +23,22 @@ canvas_edge_path :: proc(board: ^Canvas, nodes: json.Array, edge: json.Object) -
     from := board.node_indices[canvas_string(edge, "fromNode")]
     to := board.node_indices[canvas_string(edge, "toNode")]
     if from == 0 || to == 0 do return
-    a := canvas_rect(board, nodes[from - 1].(json.Object))
-    b := canvas_rect(board, nodes[to - 1].(json.Object))
+    a := canvas_render_node_rect(board, nodes[from - 1].(json.Object))
+    b := canvas_render_node_rect(board, nodes[to - 1].(json.Object))
     from_side := canvas_edge_side(edge, "fromSide", a, canvas_center(b))
     to_side := canvas_edge_side(edge, "toSide", b, canvas_center(a))
-    return canvas_route_edge(a, b, from_side, to_side, board.zoom), true
+    return canvas_edge_view_path(board, a, b, from_side, to_side), true
+}
+
+canvas_edge_view_path :: proc(board: ^Canvas, a, b: rl.Rectangle, from_side, to_side: Canvas_Side) -> Canvas_Edge_Path {
+    path := canvas_route_edge(a, b, from_side, to_side)
+    for &point in path.points[:path.count] do point = board.pan + point * board.zoom
+    return path
 }
 
 // A straight connection is sufficient when both ports face it. For other
 // pairs, keep the first and last segments perpendicular to the card borders.
-canvas_route_edge :: proc(a, b: rl.Rectangle, from_side, to_side: Canvas_Side, zoom: f32) -> Canvas_Edge_Path {
+canvas_route_edge :: proc(a, b: rl.Rectangle, from_side, to_side: Canvas_Side) -> Canvas_Edge_Path {
     start, end := canvas_anchor(a, from_side), canvas_anchor(b, to_side)
     from_normal, to_normal := canvas_side_vector(from_side), canvas_side_vector(to_side)
     delta := end - start
@@ -41,7 +47,8 @@ canvas_route_edge :: proc(a, b: rl.Rectangle, from_side, to_side: Canvas_Side, z
         return {points = {start, end, {}, {}, {}, {}}, count = 2}
     }
 
-    margin := max(12, 20 * zoom)
+    // Pick the route in canvas coordinates before applying the camera transform.
+    margin :: 20
     p, q := start + from_normal * margin, end + to_normal * margin
     left, right := min(a.x, b.x) - margin, max(a.x + a.width, b.x + b.width) + margin
     top, bottom := min(a.y, b.y) - margin, max(a.y + a.height, b.y + b.height) + margin

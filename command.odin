@@ -3,6 +3,8 @@ package main
 import "core:strings"
 
 Command_Quit :: struct {}
+Command_Color :: struct {}
+Command_Theme :: struct { choice: Theme_Choice }
 
 Command_Write :: struct {
     // Could be empty
@@ -19,6 +21,8 @@ Command :: union #no_nil {
     Command_Quit,
     Command_Write,
     Command_Edit,
+    Command_Theme,
+    Command_Color,
 }
 
 // TODO(Apaar): Break into ident or string
@@ -97,5 +101,13 @@ command_parse :: proc(src: ^string, allocator := context.temp_allocator) -> (cmd
         return Command_Quit{}, true
     }
 
+    if s == "theme" {
+        switch strings.trim_space(src^) {
+            case "": return Command_Theme{.TOGGLE}, true
+            case "dark": return Command_Theme{.DARK}, true
+            case "light": return Command_Theme{.LIGHT}, true
+        }
+    }
+    if (s == "color" || s == "col") && strings.trim_space(src^) == "" do return Command_Color{}, true
     return
 }

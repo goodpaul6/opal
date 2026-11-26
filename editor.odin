@@ -75,6 +75,7 @@ Editor :: struct {
 
     command: strings.Builder,
     command_cursor: int,
+    theme_request: Maybe(Theme_Choice),
 
     // The name of the file currently being edited
     filename: strings.Builder,

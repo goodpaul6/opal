@@ -34,7 +34,7 @@ Canvas_History :: struct {
 CANVAS_HISTORY_LIMIT :: 32
 
 Canvas_Prompt :: enum { NONE, OPEN, SAVE, CLOSE, COMMAND, CONFIRM_OPEN }
-Canvas_Drag :: enum { NONE, PAN, MOVE, RESIZE, CONNECT }
+Canvas_Drag :: enum { NONE, PAN, MOVE, RESIZE, CONNECT, MARQUEE }
 Canvas_Key_Mode :: enum { NORMAL, MOVE, RESIZE, CONNECT, G_PREFIX }
 Canvas_Side :: enum { TOP, RIGHT, BOTTOM, LEFT }
 CANVAS_SIDES :: [Canvas_Side]string{.TOP = "top", .RIGHT = "right", .BOTTOM = "bottom", .LEFT = "left"}
@@ -52,9 +52,17 @@ Canvas :: struct {
     pending_open: string,
     disk_bytes: []byte,
     node_indices: map[string]int,
+    parents: [dynamic]int,
+    group_layouts: [dynamic]Canvas_Group_Layout,
+    visual_nodes: [dynamic]int,
+    visual: bool,
+    visual_anchor: int,
+    visual_box: Maybe(rl.Rectangle),
 
     selected, selected_edge, editing: int, // One-based indices. Zero means no selection.
     editing_edge: int,
+    color_picker_open: bool,
+    color_choice: Canvas_Card_Color,
     expanded, finish_editing, finish_after_save: bool,
     exit_requested, close_after_save: bool,
 
@@ -67,7 +75,11 @@ Canvas :: struct {
     drag: Canvas_Drag,
     drag_start, drag_point: [2]f32,
     drag_origin: rl.Rectangle,
-    drag_recorded: bool,
+    resize_minimum: [2]i64,
+    drag_geometry: Maybe(Canvas_Geometry),
+    drag_members: [dynamic]int,
+    drag_moved: [dynamic]bool,
+    drag_group: int,
     side: Canvas_Side,
     last_click: f64,
     last_click_point: [2]f32,
@@ -127,6 +139,11 @@ canvas_destroy :: proc(board: ^Canvas) {
     delete(board.pending_open)
     delete(board.disk_bytes)
     delete(board.node_indices)
+    delete(board.parents)
+    delete(board.group_layouts)
+    delete(board.visual_nodes)
+    delete(board.drag_members)
+    delete(board.drag_moved)
     strings.builder_destroy(&board.prompt_text)
 }
 
@@ -166,6 +183,7 @@ canvas_step_history :: proc(board: ^Canvas, redo: bool) {
     append(target, Canvas_History{inverse, board.current.revision})
     board.current.revision = entry.revision
     board.selected, board.selected_edge = 0, 0
+    canvas_clear_visual(board)
     board.message = ""
 }
 
@@ -185,16 +203,16 @@ canvas_apply_geometry :: proc(board: ^Canvas, change: Canvas_Geometry) -> (previ
     previous = {change.node, change.resize, {node[x].(json.Integer), node[y].(json.Integer)}}
     if previous.values == change.values do return
     node[x], node[y] = change.values.x, change.values.y
-    return previous, true
-}
-
-canvas_drag_geometry :: proc(board: ^Canvas, change: Canvas_Geometry) -> bool {
-    previous, changed := canvas_apply_geometry(board, change)
-    if changed && !board.drag_recorded {
-        canvas_record_undo(board, previous)
-        board.drag_recorded = true
+    if !change.resize && canvas_is_group(node) {
+        delta := change.values - previous.values
+        for item, i in canvas_items(board, "nodes") {
+            if !canvas_has_ancestor(board, i + 1, change.node) do continue
+            child := item.(json.Object)
+            child["x"] = child["x"].(json.Integer) + delta.x
+            child["y"] = child["y"].(json.Integer) + delta.y
+        }
     }
-    return changed
+    return previous, true
 }
 
 canvas_append :: proc(board: ^Canvas, key: string, object: json.Object) {
@@ -246,9 +264,11 @@ canvas_find_node :: proc(nodes: json.Array, id: string) -> int {
 
 canvas_reindex :: proc(board: ^Canvas) {
     clear(&board.node_indices)
+    clear(&board.group_layouts)
     for item, i in canvas_items(board, "nodes") {
         board.node_indices[canvas_string(item.(json.Object), "id")] = i + 1
     }
+    canvas_reindex_parents(board)
 }
 
 canvas_new_id :: proc(board: ^Canvas) -> string {
@@ -264,8 +284,10 @@ canvas_new_id :: proc(board: ^Canvas) -> string {
 
 canvas_add_card :: proc(
     board: ^Canvas, x, y: i64, from := 0, from_side: Canvas_Side = .RIGHT, to_side: Canvas_Side = .LEFT,
+    parent := 0,
 ) -> int {
-    canvas_record_undo(board, Canvas_Append{collection = "nodes", with_edge = from != 0})
+    if parent != 0 do canvas_push_undo(board)
+    else do canvas_record_undo(board, Canvas_Append{collection = "nodes", with_edge = from != 0})
     card := make(json.Object)
     canvas_set(&card, "id", canvas_new_id(board))
     canvas_set(&card, "type", strings.clone("text"))
@@ -275,9 +297,12 @@ canvas_add_card :: proc(
     canvas_set(&card, "width", i64(dimensions.x))
     canvas_set(&card, "height", i64(dimensions.y))
     canvas_set(&card, "text", "")
+    canvas_set_parent(board, &card, parent)
     canvas_append(board, "nodes", card)
     index := len(canvas_items(board, "nodes"))
     board.node_indices[canvas_string(card, "id")] = index
+    append(&board.parents, parent)
+    if parent != 0 do canvas_grow_groups(board, index)
     if from != 0 do canvas_append_edge(board, from, index, from_side, to_side)
     return index
 }
@@ -308,6 +333,13 @@ canvas_remove_selected :: proc(board: ^Canvas) {
     if board.selected != 0 {
         node := nodes[board.selected - 1].(json.Object)
         id := canvas_string(node, "id")
+        if canvas_is_group(node) {
+            for item, i in nodes {
+                if canvas_parent(board, i + 1) != board.selected do continue
+                child := item.(json.Object)
+                canvas_set_parent(board, &child, canvas_parent(board, board.selected))
+            }
+        }
         for i := len(edges) - 1; i >= 0; i -= 1 {
             edge := edges[i].(json.Object)
             if canvas_string(edge, "fromNode") == id || canvas_string(edge, "toNode") == id {
@@ -325,6 +357,7 @@ canvas_remove_selected :: proc(board: ^Canvas) {
     }
     if _, exists := board.current.document["edges"]; exists do board.current.document["edges"] = edges
     board.selected, board.selected_edge = 0, 0
+    canvas_clear_visual(board)
 }
 
 // Keep the full JSON objects so features from other editors survive a save.
@@ -402,9 +435,11 @@ canvas_open :: proc(board: ^Canvas, path: string) -> bool {
     canvas_clear_history(&board.redo)
     board.current = {document, 0}
     canvas_reindex(board)
+    canvas_import_groups(board)
     board.saved_revision = 0
     board.filename, board.disk_bytes = filename, data
     board.selected, board.selected_edge = 0, 0
+    canvas_clear_visual(board)
     board.fit = true
     board.message = ""
     return true
@@ -489,7 +524,10 @@ canvas_editor_target :: proc(board: ^Canvas) -> (json.Object, string) {
     if board.editing_edge != 0 {
         return canvas_items(board, "edges")[board.editing_edge - 1].(json.Object), "label"
     }
-    if board.editing != 0 do return canvas_active_card(board), "text"
+    if board.editing != 0 {
+        item := canvas_active_card(board)
+        return item, "label" if canvas_is_group(item) else "text"
+    }
     return nil, ""
 }
 
@@ -515,8 +553,13 @@ canvas_begin_editor :: proc(board: ^Canvas, ed: ^Editor, text: string, insert: b
 
 canvas_edit_card :: proc(board: ^Canvas, ed: ^Editor, index: int, insert := false) {
     card := canvas_items(board, "nodes")[index - 1].(json.Object)
-    if canvas_string(card, "type") != "text" do return
-    canvas_begin_editor(board, ed, canvas_string(card, "text"), insert)
+    if canvas_is_group(card) {
+        title := canvas_string(card, "label")
+        canvas_begin_editor(board, ed, title, insert, len(title))
+    } else {
+        if canvas_string(card, "type") != "text" do return
+        canvas_begin_editor(board, ed, canvas_string(card, "text"), insert)
+    }
     board.editing = index
 }
 
@@ -549,9 +592,18 @@ canvas_finish_editing :: proc(board: ^Canvas, ed: ^Editor) {
     board.finish_editing = false
 }
 
+canvas_clear_drag :: proc(board: ^Canvas) {
+    board.drag = .NONE
+    board.drag_geometry = nil
+    board.drag_group = 0
+    clear(&board.drag_members)
+    clear(&board.drag_moved)
+}
+
 canvas_begin_prompt :: proc(board: ^Canvas, prompt: Canvas_Prompt) {
     board.prompt = prompt
-    board.drag = .NONE
+    board.color_picker_open = false
+    canvas_clear_drag(board)
     board.key_mode = .NORMAL
     board.connect_from = 0
     board.prompt_replace_all = false
@@ -609,7 +661,8 @@ canvas_request_save :: proc(board: ^Canvas, ed: ^Editor, finish_editing := false
 
 canvas_run_command :: proc(board: ^Canvas, ed: ^Editor, cmd: ^Command) -> bool {
     editing := canvas_editor_active(board)
-    switch c in cmd {
+    #partial switch c in cmd {
+        case Command_Color: return canvas_open_color_picker(board)
         case Command_Quit:
             if editing {
                 board.finish_editing = true

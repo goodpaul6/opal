@@ -26,6 +26,53 @@ status_test_font :: proc() -> rl.Font {
 }
 
 @(test)
+test_canvas_status_shares_command_layout_and_switches_theme :: proc(t: ^testing.T) {
+    board: Canvas
+    canvas_init(&board)
+    defer canvas_destroy(&board)
+    ed: Editor
+    font := status_test_font()
+    screen := [2]f32{800, 450}
+
+    canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, screen)
+    canvas_prompt_input(&board, &ed, {}, []rune{'é', 'W', 'i'}, {})
+    canvas_prompt_input(&board, &ed, []rl.KeyboardKey{.LEFT}, {}, {})
+    line := canvas_status_line(&board, &ed)
+    layout := status_line_layout(line, &font, 30, nil)
+    testing.expect_value(t, line.label, "COMMAND")
+    testing.expect(t, line.colon && line.input)
+    testing.expect_value(t, layout.command_tail, "éWi")
+    testing.expect_value(t, layout.caret_x - layout.command_x, f32(15))
+
+    canvas_prompt_input(&board, &ed, []rl.KeyboardKey{.ESCAPE}, {}, {})
+    canvas_keyboard_key(&board, &ed, .SEMICOLON, {.SHIFT}, screen)
+    canvas_prompt_input(&board, &ed, []rl.KeyboardKey{.ENTER}, []rune{'t', 'h', 'e', 'm', 'e'}, {})
+    testing.expect_value(t, ed.theme_request.? or_else .DARK, Theme_Choice.TOGGLE)
+    testing.expect_value(t, canvas_status_line(&board, &ed).label, "CANVAS")
+    data := theme_data_make_default()
+    defer theme_data_destroy(&data)
+    dark := data.bg_color
+    theme_apply_choice(&data, ed.theme_request.?)
+    testing.expect(t, data.light && data.bg_color != dark)
+
+    editor_init(&ed)
+    defer editor_destroy(&ed)
+    editor_begin_frame(&ed)
+    defer editor_end_frame(&ed)
+    editor_handle_keypress(&ed, .SEMICOLON, {.SHIFT})
+    for ch in "theme dark" do editor_handle_charpress(&ed, ch)
+    editor_handle_keypress(&ed, .ENTER, {})
+    testing.expect_value(t, ed.theme_request.? or_else .LIGHT, Theme_Choice.DARK)
+    theme_apply_choice(&data, ed.theme_request.?)
+    testing.expect_value(t, data.bg_color, dark)
+
+    canvas_open_prompt(&board)
+    line = canvas_status_line(&board, &ed)
+    testing.expect_value(t, line.label, "OPEN")
+    testing.expect(t, line.input && !line.colon)
+}
+
+@(test)
 test_editor_status_updates_in_input_frame :: proc(t: ^testing.T) {
     ed: Editor
     editor_init(&ed)
